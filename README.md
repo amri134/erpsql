@@ -2,7 +2,7 @@
 
 ERPJIN adalah dashboard Enterprise Resource Planning berbasis web untuk demonstrasi alur operasional perusahaan manufaktur. Aplikasi menggabungkan autentikasi multi-user, role dan permission, Inventory, Purchasing, PPIC, Quality Control, Finance, laporan, serta koneksi Microsoft SQL Server yang dapat dikonfigurasi sebelum login.
 
-Live demo: [ppic11-becda168e223.herokuapp.com](https://erp.hajijinamri.me)
+Live demo: [erp.hajijinamri.me](https://erp.hajijinamri.me)
 
 > ERPJIN saat ini merupakan project demo dan pembelajaran. Data PPIC, Quality Control, Finance, dan sebagian dashboard berasal dari generator sintetis. Jangan gunakan konfigurasi demo ini sebagai sistem ERP produksi tanpa hardening keamanan dan penyimpanan kredensial yang permanen.
 
