@@ -4,7 +4,7 @@ Backend awal untuk sistem ERP, memakai Node.js, TypeScript, Express, dan Microso
 
 ## Menjalankan proyek
 
-1. Pastikan file `.env` terisi. Gunakan `.env.example` sebagai acuan dan jangan menyimpan password di Git. Gunakan `DB_USERNAME`, bukan `USERNAME`, karena Windows sudah memakai `USERNAME` untuk nama akun komputer.
+1. File `.env` bersifat opsional. Jika belum berisi koneksi, aplikasi menampilkan wizard SQL Server sebelum login. Gunakan `DB_USERNAME`, bukan `USERNAME`, bila memilih menyimpan koneksi lokal.
 2. Pasang dependensi:
 
    ```powershell
@@ -33,7 +33,7 @@ npm run dev
 npm run dev:web
 ```
 
-Buka `http://localhost:5173`. Setelah login sebagai Administrator, halaman **Pengaturan → Koneksi Database** memuat konfigurasi dari `.env`. Password perlu diisi setiap kali menguji perubahan. Jika koneksi berhasil, konfigurasi lokal disimpan ke `.env`; jika gagal, konfigurasi tidak ditimpa dan dapat dikoreksi. Di Heroku, penyimpanan permanen tetap dilakukan melalui Config Vars.
+Buka `http://localhost:5173`. Alurnya adalah **hubungkan SQL Server → migrasi schema otomatis → buat Administrator pertama atau login → dashboard**. Koneksi lokal yang berhasil disimpan ke `.env`. Perubahan dari menu **Pengaturan** mengaktifkan database baru dan mengeluarkan sesi lama agar pengguna login dengan akun milik database baru tersebut.
 
 ## Endpoint awal
 
@@ -79,7 +79,7 @@ Migrasi berikutnya menambahkan master data Inventory: kategori, satuan, gudang, 
 
 ## Deploy ke Heroku
 
-Project disiapkan sebagai satu aplikasi: Heroku membangun TypeScript dan React, menjalankan migrasi pada release phase, lalu Express menyajikan API dan dashboard.
+Project disiapkan sebagai satu aplikasi: Heroku membangun TypeScript dan React, lalu Express menyajikan wizard koneksi, API, dan dashboard. Jika belum ada koneksi, release phase dilewati dengan aman; migrasi berjalan otomatis setelah wizard berhasil terhubung.
 
 1. Install Heroku CLI dan login:
 
@@ -102,18 +102,7 @@ Project disiapkan sebagai satu aplikasi: Heroku membangun TypeScript dan React, 
    heroku create NAMA-APLIKASI --stack heroku-26
    ```
 
-4. Tambahkan Config Vars melalui **Heroku Dashboard → App → Settings → Config Vars**:
-
-   - `SERVER`: host SQL Server
-   - `DB_PORT`: `1433`
-   - `DATABASE`: nama database
-   - `DB_USERNAME`: login SQL Server
-   - `PASSWORD`: password SQL Server
-   - `JWT_SECRET`: secret acak minimal 32 karakter untuk menandatangani sesi login
-
-   `DB_ENCRYPT` dan `DB_TRUST_SERVER_CERTIFICATE` bersifat opsional; jika tidak diisi, aplikasi memakai `true`. Untuk SQL Server dengan sertifikat TLS resmi, atur `DB_TRUST_SERVER_CERTIFICATE=false`.
-
-   Jangan membuat Config Var bernama `PORT`; Heroku mengaturnya secara otomatis.
+4. Config Vars database tidak diperlukan untuk mode demo ini. Jangan membuat Config Var `PORT`; Heroku mengaturnya otomatis. `JWT_SECRET` juga opsional: bila kosong, aplikasi membuat secret sementara dan sesi login akan berakhir ketika dyno restart.
 
 5. Deploy:
 
@@ -131,7 +120,7 @@ Project disiapkan sebagai satu aplikasi: Heroku membangun TypeScript dan React, 
 
 ### Dyno dan konfigurasi melalui CLI
 
-Project mempunyai proses `web` untuk Express dan `release` untuk migrasi. Proses `release` berjalan sekali sebelum rilis aktif, sehingga yang perlu dinyalakan terus hanya satu dyno `web`.
+Project mempunyai proses `web` untuk Express dan `release` yang aman tanpa database. Gunakan tepat **satu dyno web** karena koneksi demo Heroku disimpan di memori proses.
 
 Untuk demo/pengembangan yang boleh tidur saat tidak aktif, gunakan Eco (memerlukan langganan Eco):
 
@@ -147,7 +136,7 @@ heroku ps:type web=basic -a NAMA-APLIKASI
 heroku ps:scale web=1 -a NAMA-APLIKASI
 ```
 
-Config Vars minimum dapat diatur dari PowerShell sebagai berikut. Ganti seluruh nilai contoh dan jangan menyalin password asli ke dokumentasi atau Git:
+Jika ingin sesi JWT tetap berlaku setelah restart, Anda boleh menambahkan satu Config Var `JWT_SECRET`. Ini opsional dan bukan tempat konfigurasi database:
 
 Untuk membuat `JWT_SECRET` pada Windows PowerShell versi lama maupun baru:
 
@@ -160,17 +149,15 @@ $jwtGenerator.Dispose()
 ```
 
 ```powershell
-heroku config:set SERVER="PUBLIC_IP_SQL" DB_PORT="1433" DATABASE="erp" DB_USERNAME="sqlserver" PASSWORD="PASSWORD_SQL" JWT_SECRET="$jwtSecret" -a NAMA-APLIKASI
+heroku config:set JWT_SECRET="$jwtSecret" -a NAMA-APLIKASI
 heroku config -a NAMA-APLIKASI
 ```
 
-Perintah pertama menyimpan nilai sensitif dalam riwayat terminal. Untuk mesin bersama, masukkan `PASSWORD` dan `JWT_SECRET` melalui Dashboard Heroku, atau bersihkan riwayat PowerShell setelah konfigurasi.
-
-Pada Heroku, filesystem dyno bersifat sementara. Karena itu perubahan koneksi dari halaman Settings hanya dapat diuji; agar permanen, ubah Config Vars di Heroku Dashboard lalu restart app. Untuk koneksi SQL Server publik, batasi firewall bila Anda memiliki alamat outbound statis; `0.0.0.0/0` sebaiknya hanya untuk pengujian.
+Pada Heroku, koneksi aktif hanya tersimpan di memori dyno. Setelah restart/deploy, wizard akan muncul lagi. Ini sengaja untuk demo tanpa Config Vars; produksi memerlukan penyimpanan terenkripsi eksternal. Untuk SQL Server publik, `0.0.0.0/0` sebaiknya hanya untuk pengujian.
 
 ## Login pertama
 
-Setelah migrasi berhasil, buka dashboard. Jika tabel pengguna masih kosong, halaman otomatis meminta pembuatan Administrator pertama. Setelah akun dibuat, login berikutnya memakai username dan password tersebut. Password disimpan sebagai hash bcrypt, bukan teks asli.
+Buka aplikasi dan isi koneksi SQL Server terlebih dahulu. ERPJIN menjalankan migrasi otomatis. Jika database tersebut belum mempunyai pengguna, halaman meminta pembuatan Administrator pertama; jika sudah, halaman login langsung muncul. Password ERP disimpan sebagai hash bcrypt, bukan teks asli.
 
 Format koneksi pada halaman Settings mengikuti `sqlcmd`:
 

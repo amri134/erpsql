@@ -4,8 +4,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { env, saveDatabaseConnection } from "./config/env.js";
-import { checkDatabaseConnection, closeDatabaseConnection, getDatabasePool, testDatabaseConnection } from "./database/sql-server.js";
+import { env, hasConfiguredDatabase, saveDatabaseConnection, setDatabaseConnection } from "./config/env.js";
+import { runMigrations } from "./database/migrations.js";
+import { activateDatabaseConnection, checkDatabaseConnection, closeDatabaseConnection, getDatabasePool } from "./database/sql-server.js";
 
 export const app = express();
 
@@ -343,6 +344,43 @@ app.get("/health/db", async (_request, response) => {
   }
 });
 
+app.get("/api/setup/status", (_request, response) => {
+  response.json({ databaseConfigured: hasConfiguredDatabase(), storage: process.env.DYNO ? "dyno-memory" : "local-env" });
+});
+
+function parseDatabaseConnection(body: Record<string, unknown>) {
+  const { server, database, user, password, encrypt, trustServerCertificate } = body;
+  const serverMatch = typeof server === "string" ? server.trim().match(/^tcp:([^,\s]+),(\d{1,5})$/i) : null;
+  const port = serverMatch ? Number(serverMatch[2]) : NaN;
+  if (!serverMatch || typeof database !== "string" || !database.trim() || typeof user !== "string" || !user.trim() || typeof password !== "string" || !password || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return { server: serverMatch[1], port, database: database.trim(), user: user.trim(), password, encrypt: encrypt !== false, trustServerCertificate: trustServerCertificate === true };
+}
+
+async function connectAndPrepareDatabase(request: express.Request, response: express.Response) {
+  const submittedConnection = parseDatabaseConnection(request.body ?? {});
+  if (!submittedConnection) { response.status(400).json({ message: "Gunakan format tcp:HOST,PORT lalu isi database, username, dan password." }); return; }
+  const previousConnection = { ...env.database };
+  try {
+    const active = await activateDatabaseConnection(submittedConnection);
+    const migrations = await runMigrations(active.pool);
+    const saved = !process.env.DYNO;
+    if (saved) await saveDatabaseConnection(submittedConnection);
+    const users = await active.pool.request().query<{ total: number }>("SELECT COUNT(*) AS total FROM dbo.users;");
+    response.json({ status: "connected", database: active.databaseName, server: active.serverName, saved, migrations, needsBootstrap: users.recordset[0].total === 0,
+      message: saved ? "Koneksi aktif dan tersimpan untuk lokal." : "Koneksi aktif pada dyno Heroku ini." });
+  } catch (error) {
+    await closeDatabaseConnection().catch(() => undefined);
+    setDatabaseConnection(previousConnection);
+    console.error("Database connection setup failed:", error);
+    response.status(503).json({ status: "unavailable", message: "Koneksi atau persiapan schema gagal. Periksa kredensial, izin CREATE TABLE, firewall, dan nama database." });
+  }
+}
+
+app.post("/api/setup/database", async (request, response) => {
+  if (hasConfiguredDatabase()) { response.status(409).json({ message: "Database sudah aktif. Login sebagai Administrator untuk menggantinya." }); return; }
+  await connectAndPrepareDatabase(request, response);
+});
+
 app.get("/api/database/config", requireAuth, requireAdministrator, (_request, response) => {
   response.status(200).json({
     server: `tcp:${env.database.server},${env.database.port}`,
@@ -354,51 +392,7 @@ app.get("/api/database/config", requireAuth, requireAdministrator, (_request, re
 });
 
 app.post("/api/database/test-connection", requireAuth, requireAdministrator, async (request, response) => {
-  const { server, database, user, password, encrypt, trustServerCertificate } = request.body ?? {};
-  const serverMatch = typeof server === "string" ? server.trim().match(/^tcp:([^,\s]+),(\d{1,5})$/i) : null;
-  const parsedPort = serverMatch ? Number(serverMatch[2]) : NaN;
-  const parsedServer = serverMatch?.[1] ?? "";
-
-  if (
-    !serverMatch || !parsedServer ||
-    typeof database !== "string" || !database.trim() ||
-    typeof user !== "string" || !user.trim() ||
-    typeof password !== "string" || !password ||
-    !Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535
-  ) {
-    response.status(400).json({ message: "Isi host, port, database, username, dan password dengan benar." });
-    return;
-  }
-
-  try {
-    const submittedConnection = {
-      server: parsedServer,
-      port: parsedPort,
-      database: database.trim(),
-      user: user.trim(),
-      password,
-      encrypt: encrypt !== false,
-      trustServerCertificate: trustServerCertificate === true
-    };
-    const connection = await testDatabaseConnection(submittedConnection);
-    const saved = !process.env.DYNO;
-    if (saved) await saveDatabaseConnection(submittedConnection);
-    await closeDatabaseConnection();
-
-    response.status(200).json({
-      status: "connected",
-      database: connection.databaseName,
-      server: connection.serverName,
-      saved,
-      message: saved ? "Koneksi SQL Server berhasil diuji dan konfigurasi disimpan." : "Koneksi berhasil diuji. Di Heroku, simpan perubahan melalui Config Vars."
-    });
-  } catch (error) {
-    console.error("Database connection test failed:", error);
-    response.status(503).json({
-      status: "unavailable",
-      message: "Koneksi gagal. Periksa host, port, database, username, password, dan firewall."
-    });
-  }
+  await connectAndPrepareDatabase(request, response);
 });
 
 app.get("/api/purchasing/overview", requireAuth, requirePermission("purchasing.read"), async (_request, response) => {

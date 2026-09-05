@@ -9,6 +9,7 @@ import { DatabaseSettings } from "./settings/DatabaseSettings";
 import { AuthScreen } from "./auth/AuthScreen";
 import { UserManagement } from "./admin/UserManagement";
 import { PurchasingPage } from "./purchasing/PurchasingPage";
+import { DatabaseSetup } from "./setup/DatabaseSetup";
 
 type MenuKey = "dashboard" | "inventory" | "purchasing" | "ppic" | "quality" | "finance" | "reports" | "users" | "settings";
 type CurrentUser = { userId: string; username: string; fullName: string; roles: string[]; permissions: string[] };
@@ -50,6 +51,7 @@ const movements = [
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem("erp_token") ?? "");
+  const [databaseConfigured, setDatabaseConfigured] = useState<boolean | null>(null);
   const [needsBootstrap, setNeedsBootstrap] = useState<boolean | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [activeMenu, setActiveMenu] = useState<MenuKey>("dashboard");
@@ -72,17 +74,22 @@ function App() {
       .catch(() => undefined);
   }, [token]);
 
-  useEffect(() => { fetch("/api/auth/status").then((response) => response.json()).then((data) => setNeedsBootstrap(Boolean(data.needsBootstrap))).catch(() => setNeedsBootstrap(null)); }, []);
+  useEffect(() => { fetch("/api/setup/status").then((response) => response.json()).then((data) => setDatabaseConfigured(Boolean(data.databaseConfigured))).catch(() => setDatabaseConfigured(false)); }, []);
 
   useEffect(() => {
-    if (!token) { setCurrentUser(null); return; }
+    if (!databaseConfigured) { setNeedsBootstrap(null); return; }
+    fetch("/api/auth/status").then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.message); return body; }).then((data) => setNeedsBootstrap(Boolean(data.needsBootstrap))).catch(() => setNeedsBootstrap(null));
+  }, [databaseConfigured]);
+
+  useEffect(() => {
+    if (!token || !databaseConfigured) { setCurrentUser(null); return; }
     let active = true;
     fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
       .then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.message); return body.user as CurrentUser; })
       .then((user) => { if (active) setCurrentUser(user); })
       .catch(() => { if (active) { localStorage.removeItem("erp_token"); setToken(""); setCurrentUser(null); } });
     return () => { active = false; };
-  }, [token]);
+  }, [token, databaseConfigured]);
 
   const pageTitle = useMemo(() => navigation.find((item) => item.key === activeMenu)?.label ?? "Dashboard", [activeMenu]);
 
@@ -100,8 +107,11 @@ function App() {
       const data = await response.json();
 
       if (!response.ok) throw new Error(data.message);
-      setConnectionResult({ kind: "success", message: `${data.message} Database: ${data.database}.` });
+      window.alert(`${data.message} Database aktif: ${data.database}. Silakan login menggunakan akun dari database tersebut.`);
       setPassword("");
+      setNeedsBootstrap(Boolean(data.needsBootstrap));
+      setDatabaseConfigured(true);
+      logout();
     } catch (error) {
       setConnectionResult({ kind: "error", message: error instanceof Error ? error.message : "Koneksi gagal diuji." });
     } finally {
@@ -116,6 +126,8 @@ function App() {
   function authenticated(newToken: string) { localStorage.setItem("erp_token", newToken); setToken(newToken); setNeedsBootstrap(false); }
   function logout() { localStorage.removeItem("erp_token"); setToken(""); setCurrentUser(null); }
 
+  if (databaseConfigured === null) return <div className="auth-page"><div className="auth-card"><p>Memeriksa koneksi ERPJIN...</p></div></div>;
+  if (!databaseConfigured) return <DatabaseSetup onConnected={(bootstrap) => { setDatabaseConfigured(true); setNeedsBootstrap(bootstrap); }} />;
   if (!token) return <AuthScreen needsBootstrap={needsBootstrap} onAuthenticated={authenticated} />;
   if (!currentUser) return <div className="auth-page"><div className="auth-card"><p>Memverifikasi sesi ERPJIN...</p></div></div>;
 
