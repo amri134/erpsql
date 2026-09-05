@@ -7,9 +7,18 @@ import { resolve } from "node:path";
 import { env, hasConfiguredDatabase, saveDatabaseConnection, setDatabaseConnection } from "./config/env.js";
 import { runMigrations } from "./database/migrations.js";
 import { activateDatabaseConnection, checkDatabaseConnection, closeDatabaseConnection, getDatabasePool } from "./database/sql-server.js";
+import { createDemoExcel, createDemoPdf } from "./exports/demo-export.js";
 
 export const app = express();
 
+app.disable("x-powered-by");
+if (process.env.DYNO) app.set("trust proxy", 1);
+app.use((_request, response, next) => {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Referrer-Policy", "same-origin");
+  next();
+});
 app.use(express.json());
 
 type AuthenticatedUser = { userId: string; username: string; fullName: string; roles: string[]; permissions: string[] };
@@ -356,9 +365,12 @@ function parseDatabaseConnection(body: Record<string, unknown>) {
   return { server: serverMatch[1], port, database: database.trim(), user: user.trim(), password, encrypt: encrypt !== false, trustServerCertificate: trustServerCertificate === true };
 }
 
+let databaseSetupInProgress = false;
 async function connectAndPrepareDatabase(request: express.Request, response: express.Response) {
   const submittedConnection = parseDatabaseConnection(request.body ?? {});
   if (!submittedConnection) { response.status(400).json({ message: "Gunakan format tcp:HOST,PORT lalu isi database, username, dan password." }); return; }
+  if (databaseSetupInProgress) { response.status(409).json({ message: "Konfigurasi database sedang diproses. Tunggu beberapa saat lalu coba kembali." }); return; }
+  databaseSetupInProgress = true;
   const previousConnection = { ...env.database };
   try {
     const active = await activateDatabaseConnection(submittedConnection);
@@ -373,6 +385,8 @@ async function connectAndPrepareDatabase(request: express.Request, response: exp
     setDatabaseConnection(previousConnection);
     console.error("Database connection setup failed:", error);
     response.status(503).json({ status: "unavailable", message: "Koneksi atau persiapan schema gagal. Periksa kredensial, izin CREATE TABLE, firewall, dan nama database." });
+  } finally {
+    databaseSetupInProgress = false;
   }
 }
 
@@ -393,6 +407,62 @@ app.get("/api/database/config", requireAuth, requireAdministrator, (_request, re
 
 app.post("/api/database/test-connection", requireAuth, requireAdministrator, async (request, response) => {
   await connectAndPrepareDatabase(request, response);
+});
+
+const demoModules = new Set(["ppic", "quality", "finance", "reports"]);
+function demoModule(request: express.Request, response: express.Response): string | null {
+  const code = String(request.params.module ?? "").toLowerCase();
+  if (!demoModules.has(code)) { response.status(404).json({ message: "Modul demo tidak ditemukan." }); return null; }
+  return code;
+}
+async function readDemoRecords(moduleCode: string): Promise<Record<string, unknown>[]> {
+  const connection = await getDatabasePool();
+  const result = await connection.request().input("module", sql.NVarChar(30), moduleCode)
+    .query<{ payload: string }>("SELECT payload FROM dbo.demo_module_records WHERE module_code=@module ORDER BY sort_order,record_key;");
+  return result.recordset.map((record)=>JSON.parse(record.payload) as Record<string,unknown>);
+}
+
+app.get("/api/demo/:module", requireAuth, async (request, response) => {
+  const moduleCode=demoModule(request,response); if(!moduleCode) return;
+  try { const records=await readDemoRecords(moduleCode); response.json({ module:moduleCode,source:"sql",count:records.length,records }); }
+  catch(error){ console.error("Read demo records failed:",error); response.status(503).json({message:"Data demo belum dapat dibaca dari SQL Server. Pastikan migrasi terbaru sudah berjalan."}); }
+});
+
+app.post("/api/demo/:module/sync", requireAuth, async (request: AuthenticatedRequest, response) => {
+  const moduleCode=demoModule(request,response); if(!moduleCode) return;
+  const records=Array.isArray(request.body?.records) ? request.body.records as Array<{key?:unknown;data?:unknown}> : [];
+  if(!records.length || records.length>100 || records.some((record)=>typeof record.key!=="string" || !record.key.trim() || record.key.length>100 || !record.data || typeof record.data!=="object" || Array.isArray(record.data))){ response.status(400).json({message:"Data demo tidak valid atau melebihi 100 baris."}); return; }
+  const connection=await getDatabasePool(); const transaction=new sql.Transaction(connection);
+  try {
+    await transaction.begin();
+    for(let index=0;index<records.length;index++){
+      const record=records[index]; const payload=JSON.stringify(record.data);
+      if(payload.length>100000) throw new Error("PAYLOAD_TOO_LARGE");
+      await new sql.Request(transaction).input("module",sql.NVarChar(30),moduleCode).input("key",sql.NVarChar(100),(record.key as string).trim()).input("payload",sql.NVarChar(sql.MAX),payload).input("sort",sql.Int,index).input("userId",sql.UniqueIdentifier,request.auth!.userId).query(`
+        IF EXISTS(SELECT 1 FROM dbo.demo_module_records WITH(UPDLOCK,HOLDLOCK) WHERE module_code=@module AND record_key=@key)
+          UPDATE dbo.demo_module_records SET payload=@payload,sort_order=@sort,synced_by=@userId,updated_at=SYSUTCDATETIME() WHERE module_code=@module AND record_key=@key;
+        ELSE INSERT dbo.demo_module_records(module_code,record_key,payload,sort_order,synced_by) VALUES(@module,@key,@payload,@sort,@userId);
+      `);
+    }
+    const keys=JSON.stringify(records.map((record)=>(record.key as string).trim()));
+    await new sql.Request(transaction).input("module",sql.NVarChar(30),moduleCode).input("keys",sql.NVarChar(sql.MAX),keys)
+      .query("DELETE dbo.demo_module_records WHERE module_code=@module AND record_key NOT IN(SELECT [value] FROM OPENJSON(@keys));");
+    await new sql.Request(transaction).input("userId",sql.UniqueIdentifier,request.auth!.userId).input("module",sql.NVarChar(100),moduleCode).input("values",sql.NVarChar(sql.MAX),JSON.stringify({count:records.length}))
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id,current_values) VALUES(@userId,N'demo.sync',N'demo_module',@module,@values);");
+    await transaction.commit(); response.json({message:`${records.length} data demo berhasil dikirim ke SQL Server.`,count:records.length});
+  } catch(error){ await transaction.rollback().catch(()=>undefined); console.error("Sync demo records failed:",error); response.status(500).json({message:"Data demo gagal disimpan ke SQL Server."}); }
+});
+
+app.get("/api/demo/:module/export/:format", requireAuth, async (request,response) => {
+  const moduleCode=demoModule(request,response); if(!moduleCode) return;
+  const format=String(request.params.format).toLowerCase(); if(!["xlsx","pdf"].includes(format)){ response.status(400).json({message:"Format ekspor harus xlsx atau pdf."}); return; }
+  try {
+    const records=await readDemoRecords(moduleCode); if(!records.length){ response.status(404).json({message:"Belum ada data SQL untuk diekspor. Kirim data demo terlebih dahulu."}); return; }
+    const buffer=format==="xlsx" ? await createDemoExcel(moduleCode,records) : await createDemoPdf(moduleCode,records);
+    response.setHeader("Content-Type",format==="xlsx"?"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"application/pdf");
+    response.setHeader("Cache-Control","no-store");
+    response.setHeader("Content-Disposition",`attachment; filename="erpjin-${moduleCode}.${format}"`); response.send(buffer);
+  } catch(error){ console.error("Export demo records failed:",error); response.status(500).json({message:"File ekspor gagal dibuat."}); }
 });
 
 app.get("/api/purchasing/overview", requireAuth, requirePermission("purchasing.read"), async (_request, response) => {
@@ -606,3 +676,13 @@ if (existsSync(publicDirectory)) {
     response.sendFile(resolve(publicDirectory, "index.html"));
   });
 }
+
+app.use((error: unknown, request: express.Request, response: express.Response, next: express.NextFunction) => {
+  if (response.headersSent) { next(error); return; }
+  if (error instanceof SyntaxError && request.is("application/json")) {
+    response.status(400).json({ message: "Format JSON pada request tidak valid." });
+    return;
+  }
+  console.error("Unhandled request error:", error);
+  response.status(500).json({ message: "Terjadi kesalahan internal pada server." });
+});

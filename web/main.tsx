@@ -10,6 +10,7 @@ import { AuthScreen } from "./auth/AuthScreen";
 import { UserManagement } from "./admin/UserManagement";
 import { PurchasingPage } from "./purchasing/PurchasingPage";
 import { DatabaseSetup } from "./setup/DatabaseSetup";
+import { FinancePage, ProductionPage, QualityPage, ReportsPage } from "./demo/DemoModules";
 
 type MenuKey = "dashboard" | "inventory" | "purchasing" | "ppic" | "quality" | "finance" | "reports" | "users" | "settings";
 type CurrentUser = { userId: string; username: string; fullName: string; roles: string[]; permissions: string[] };
@@ -160,9 +161,12 @@ function App() {
           {activeMenu === "dashboard" && <Dashboard name={currentUser.fullName} canAccessInventory={canReadInventory} onNavigate={setActiveMenu} />}
           {activeMenu === "inventory" && <InventoryPage token={token} />}
           {activeMenu === "purchasing" && <PurchasingPage token={token} canManage={canManagePurchasing} canApprove={canApprovePurchasing} />}
+          {activeMenu === "ppic" && <ProductionPage />}
+          {activeMenu === "quality" && <QualityPage />}
+          {activeMenu === "finance" && <FinancePage />}
+          {activeMenu === "reports" && <ReportsPage />}
           {activeMenu === "users" && <UserManagement token={token} />}
           {activeMenu === "settings" && <DatabaseSettings config={config} password={password} testing={isTesting} result={connectionResult} onPassword={setPassword} onConfig={(key, value) => setConfig((current) => ({ ...current, [key]: value }))} onSubmit={testConnection} />}
-          {activeMenu !== "dashboard" && activeMenu !== "settings" && activeMenu !== "inventory" && activeMenu !== "purchasing" && activeMenu !== "users" && <ModulePlaceholder title={pageTitle} />}
         </section>
       </main>
     </div>
@@ -177,7 +181,7 @@ function Dashboard({ name, canAccessInventory, onNavigate }: { name: string; can
       <article className="panel movement-panel"><div className="panel-header"><div><h3>Pergerakan Stok Terkini</h3><p>Aktivitas inventory hari ini</p></div><button className="link-button" onClick={() => onNavigate("inventory")}>Lihat semua →</button></div><div className="table-wrap"><table><thead><tr><th>KODE</th><th>BARANG</th><th>AKTIVITAS</th><th>QTY</th><th>WAKTU</th></tr></thead><tbody>{movements.map(([code, item, activity, quantity, date, color]) => <tr key={code}><td className="code">{code}</td><td><strong>{item}</strong></td><td><span className={`badge ${color}`}>{activity}</span></td><td className={color === "red" ? "qty-minus" : "qty-plus"}>{quantity}</td><td className="muted">{date}</td></tr>)}</tbody></table></div></article>
       <article className="panel alerts"><div className="panel-header"><div><h3>Perlu Perhatian</h3><p>Notifikasi operasional</p></div><span className="alert-count">4</span></div><Alert title="Stok minimum tercapai" description="EVA White tinggal 120 KG" type="warning" /><Alert title="PO menunggu persetujuan" description="3 purchase request perlu review" type="info" /><Alert title="Inspeksi QC belum selesai" description="Batch PRD-0264 masih dalam proses" type="purple" /><button className="outline-button">Buka pusat notifikasi</button></article>
     </div>
-    <div className="panel quick-panel"><div className="panel-header"><div><h3>Akses Cepat</h3><p>Mulai aktivitas umum dalam satu klik</p></div></div><div className="quick-actions"><Quick icon="＋" title="Barang Masuk" tone="blue" /><Quick icon="−" title="Barang Keluar" tone="orange" /><Quick icon="⌁" title="Purchase Request" tone="violet" /><Quick icon="✓" title="Inspeksi QC" tone="green" /></div></div>
+    <div className="panel quick-panel"><div className="panel-header"><div><h3>Akses Cepat</h3><p>Mulai aktivitas umum dalam satu klik</p></div></div><div className="quick-actions"><Quick icon="＋" title="Barang Masuk" tone="blue" onClick={()=>onNavigate("inventory")} /><Quick icon="−" title="Barang Keluar" tone="orange" onClick={()=>onNavigate("inventory")} /><Quick icon="⌁" title="Purchase Request" tone="violet" onClick={()=>onNavigate("purchasing")} /><Quick icon="✓" title="Inspeksi QC" tone="green" onClick={()=>onNavigate("quality")} /></div></div>
   </>;
 }
 
@@ -201,8 +205,7 @@ function InventoryPage({ token }: { token: string }) {
     <div className="metric-grid"><article className="metric-card"><div className="metric-icon blue">▣</div><div><p>Total Barang Aktif</p><h3>{data?.summary.totalItems ?? "—"}</h3><small className="blue">Master inventory</small></div></article><article className="metric-card"><div className="metric-icon orange">!</div><div><p>Stok Perlu Perhatian</p><h3>{data?.summary.lowStock ?? "—"}</h3><small className="orange">Di bawah batas minimum</small></div></article></div><article className="panel"><div className="panel-header"><div><h3>Daftar Barang</h3><p>Stok dihitung dari seluruh transaksi inventory.</p></div></div>{data ? <div className="table-wrap"><table><thead><tr><th>KODE</th><th>BARANG</th><th>STOK SAAT INI</th><th>MINIMUM</th><th>STATUS</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.itemId}><td className="code">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.currentStock} {item.unit}</td><td>{item.minimumStock} {item.unit}</td><td><span className={`badge ${item.currentStock <= item.minimumStock ? "red" : "green"}`}>{item.currentStock <= item.minimumStock ? "Perlu perhatian" : "Aman"}</span></td></tr>)}</tbody></table></div> : <p className="muted">{message}</p>}</article></>;
 }
 
-function ModulePlaceholder({ title }: { title: string }) { return <div className="module-placeholder panel"><div className="placeholder-icon">◫</div><h2>{title}</h2><p>Modul ini sudah disiapkan pada navigasi dashboard dan akan dikembangkan setelah fondasi akses pengguna selesai.</p><button className="primary-button">Lihat rencana modul</button></div>; }
 function Alert({ title, description, type }: { title: string; description: string; type: string }) { return <div className="alert-item"><span className={`alert-icon ${type}`}>!</span><div><strong>{title}</strong><p>{description}</p></div><button>›</button></div>; }
-function Quick({ icon, title, tone }: { icon: string; title: string; tone: string }) { return <button className="quick"><span className={`quick-icon ${tone}`}>{icon}</span><span>{title}</span><i>→</i></button>; }
+function Quick({ icon, title, tone, onClick }: { icon: string; title: string; tone: string; onClick: () => void }) { return <button className="quick" onClick={onClick}><span className={`quick-icon ${tone}`}>{icon}</span><span>{title}</span><i>→</i></button>; }
 
 createRoot(document.getElementById("root")!).render(<App />);

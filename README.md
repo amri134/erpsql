@@ -172,12 +172,28 @@ tcp:PUBLIC_IP,1433
 - User & Akses: daftar pengguna, tambah akun, ubah departemen/multi-role, aktif/nonaktif akun, serta editor permission per role.
 - Inventory awal: master barang, ringkasan stok, serta transaksi masuk/keluar.
 - Purchasing awal: supplier, Purchase Request multi-item, estimasi nilai, serta alur persetujuan/penolakan berbasis permission.
+- PPIC & Produksi demo: work order, progres target, utilisasi, downtime, dan kapasitas line.
+- Quality Control demo: inspeksi batch, pass/defect rate, defect utama, dan tindakan korektif.
+- Finance demo: kas, piutang, utang, laba, arus kas, komposisi biaya, dan transaksi.
+- Pusat Laporan demo: pencarian, pilihan periode, pratinjau simulasi, dan ekspor CSV dummy.
+- Sinkronisasi data generator ke SQL Server: PPIC, QC, Finance, dan Laporan dapat mengirim data dummy secara idempotent, memuatnya kembali dari database aktif, serta mengekspor data SQL ke PDF atau Excel.
 
 Permission `inventory.read` dan `inventory.manage` sudah diterapkan pada API. Administrator selalu mempunyai akses penuh; role lain mengikuti permission yang disimpan melalui menu **User & Akses → Role & Permission**.
 
+### Menguji data demo melalui SQL
+
+Pada modul PPIC, Quality Control, Finance, atau Laporan:
+
+1. **Kirim ke SQL** melakukan upsert data generator ke database yang sedang aktif, lalu membacanya kembali sebagai verifikasi.
+2. **Muat dari SQL** mengganti tabel di layar dengan data yang tersimpan pada SQL Server.
+3. **Data Generator** kembali ke data bawaan tanpa menghapus data SQL.
+4. **PDF** dan **Excel** aktif setelah data SQL berhasil dimuat. File ekspor selalu dibuat dari database aktif, bukan langsung dari data browser.
+
+Sinkronisasi bersifat idempotent berdasarkan kode unik setiap baris sehingga menekan tombol berulang kali memperbarui data, bukan menggandakannya.
+
 Role operasional mempunyai permission awal yang aman: Warehouse Staff dapat membaca/mengelola inventory, sedangkan Manager, PPIC, QC, dan Finance mendapat akses baca. Administrator dapat menyesuaikannya melalui editor permission.
 
-Tahap lanjutan yang belum dikerjakan adalah konversi Purchase Request menjadi Purchase Order, PPIC/Produksi, Quality Control, Finance, laporan dinamis, dan pengujian otomatis yang lebih lengkap.
+Tahap lanjutan yang belum dikerjakan adalah konversi Purchase Request menjadi Purchase Order, integrasi SQL untuk modul demo PPIC/QC/Finance/Laporan, laporan PDF/XLSX, dan pengujian otomatis yang lebih lengkap.
 
 ## Memperbarui deployment Heroku
 
@@ -186,6 +202,8 @@ Setiap selesai mengubah aplikasi, jalankan pemeriksaan lengkap dari root project
 ```powershell
 npm run verify
 ```
+
+Perintah tersebut menjalankan type-check backend/frontend, pengujian otomatis generator PDF/Excel, lalu production build React. Endpoint API juga mengirim header keamanan dasar dan mengembalikan error JSON yang konsisten untuk request API yang tidak valid.
 
 Periksa file yang akan dikirim, buat commit baru, lalu push branch `main` ke aplikasi Heroku yang sudah terhubung:
 
