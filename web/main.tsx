@@ -9,6 +9,7 @@ import { AuthScreen } from "./auth/AuthScreen";
 import { UserManagement } from "./admin/UserManagement";
 
 type MenuKey = "dashboard" | "inventory" | "purchasing" | "ppic" | "quality" | "finance" | "reports" | "users" | "settings";
+type CurrentUser = { userId: string; username: string; fullName: string; roles: string[]; permissions: string[] };
 
 type ConnectionConfig = {
   server: string;
@@ -48,6 +49,7 @@ const movements = [
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem("erp_token") ?? "");
   const [needsBootstrap, setNeedsBootstrap] = useState<boolean | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [activeMenu, setActiveMenu] = useState<MenuKey>("dashboard");
   const [config, setConfig] = useState<ConnectionConfig>({
     server: "tcp:PUBLIC_IP,1433",
@@ -69,6 +71,16 @@ function App() {
   }, [token]);
 
   useEffect(() => { fetch("/api/auth/status").then((response) => response.json()).then((data) => setNeedsBootstrap(Boolean(data.needsBootstrap))).catch(() => setNeedsBootstrap(null)); }, []);
+
+  useEffect(() => {
+    if (!token) { setCurrentUser(null); return; }
+    let active = true;
+    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.message); return body.user as CurrentUser; })
+      .then((user) => { if (active) setCurrentUser(user); })
+      .catch(() => { if (active) { localStorage.removeItem("erp_token"); setToken(""); setCurrentUser(null); } });
+    return () => { active = false; };
+  }, [token]);
 
   const pageTitle = useMemo(() => navigation.find((item) => item.key === activeMenu)?.label ?? "Dashboard", [activeMenu]);
 
@@ -100,9 +112,17 @@ function App() {
   }
 
   function authenticated(newToken: string) { localStorage.setItem("erp_token", newToken); setToken(newToken); setNeedsBootstrap(false); }
-  function logout() { localStorage.removeItem("erp_token"); setToken(""); }
+  function logout() { localStorage.removeItem("erp_token"); setToken(""); setCurrentUser(null); }
 
   if (!token) return <AuthScreen needsBootstrap={needsBootstrap} onAuthenticated={authenticated} />;
+  if (!currentUser) return <div className="auth-page"><div className="auth-card"><p>Memverifikasi sesi ERPJIN...</p></div></div>;
+
+  const isAdministrator = currentUser.roles.includes("administrator");
+  const canReadInventory = isAdministrator || currentUser.permissions.includes("inventory.read");
+  const mainNavigation = navigation.slice(0, 7).filter((item) => item.key !== "inventory" || canReadInventory);
+  const systemNavigation = navigation.slice(7).filter((item) => isAdministrator || !["users", "settings"].includes(item.key));
+  const initials = currentUser.fullName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  const currentDate = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
 
   return (
     <div className="shell">
@@ -111,17 +131,16 @@ function App() {
         <div className="workspace"><span className="workspace-dot" /> PT Hajijin Amri <span className="chevron">⌄</span></div>
         <nav>
           <p className="nav-label">MENU UTAMA</p>
-          {navigation.slice(0, 7).map((item) => <button key={item.key} className={`nav-item ${activeMenu === item.key ? "active" : ""}`} onClick={() => setActiveMenu(item.key)}><span>{item.icon}</span>{item.label}</button>)}
-          <p className="nav-label nav-label-bottom">SISTEM</p>
-          {navigation.slice(7).map((item) => <button key={item.key} className={`nav-item ${activeMenu === item.key ? "active" : ""}`} onClick={() => setActiveMenu(item.key)}><span>{item.icon}</span>{item.label}</button>)}
+          {mainNavigation.map((item) => <button key={item.key} className={`nav-item ${activeMenu === item.key ? "active" : ""}`} onClick={() => setActiveMenu(item.key)}><span>{item.icon}</span>{item.label}</button>)}
+          {systemNavigation.length > 0 && <><p className="nav-label nav-label-bottom">SISTEM</p>{systemNavigation.map((item) => <button key={item.key} className={`nav-item ${activeMenu === item.key ? "active" : ""}`} onClick={() => setActiveMenu(item.key)}><span>{item.icon}</span>{item.label}</button>)}</>}
         </nav>
-        <button className="sidebar-footer logout" onClick={logout}><div className="avatar">AR</div><div><strong>Admin ERP</strong><small>Keluar dari sesi</small></div><span className="dots">↗</span></button>
+        <button className="sidebar-footer logout" onClick={logout}><div className="avatar">{initials || "U"}</div><div><strong>{currentUser.fullName}</strong><small>{currentUser.roles.join(", ") || "Pengguna"} · Keluar</small></div><span className="dots">↗</span></button>
       </aside>
 
       <main>
-        <header className="topbar"><div><p className="breadcrumb">ERPJIN / {pageTitle}</p><h1>{pageTitle}</h1></div><div className="top-actions"><button className="icon-button">⌕</button><button className="notification">♧<i /></button><span className="date">Jumat, 5 September 2026</span></div></header>
+        <header className="topbar"><div><p className="breadcrumb">ERPJIN / {pageTitle}</p><h1>{pageTitle}</h1></div><div className="top-actions"><button className="icon-button">⌕</button><button className="notification">♧<i /></button><span className="date">{currentDate}</span></div></header>
         <section className="content">
-          {activeMenu === "dashboard" && <Dashboard onNavigate={setActiveMenu} />}
+          {activeMenu === "dashboard" && <Dashboard name={currentUser.fullName} canAccessInventory={canReadInventory} onNavigate={setActiveMenu} />}
           {activeMenu === "inventory" && <InventoryPage token={token} />}
           {activeMenu === "users" && <UserManagement token={token} />}
           {activeMenu === "settings" && <DatabaseSettings config={config} password={password} testing={isTesting} result={connectionResult} onPassword={setPassword} onConfig={(key, value) => setConfig((current) => ({ ...current, [key]: value }))} onSubmit={testConnection} />}
@@ -132,9 +151,9 @@ function App() {
   );
 }
 
-function Dashboard({ onNavigate }: { onNavigate: (menu: MenuKey) => void }) {
+function Dashboard({ name, canAccessInventory, onNavigate }: { name: string; canAccessInventory: boolean; onNavigate: (menu: MenuKey) => void }) {
   return <>
-    <div className="welcome"><div><h2>Selamat pagi, Admin <span>👋</span></h2><p>Berikut ringkasan aktivitas operasional perusahaan hari ini.</p></div><button className="primary-button" onClick={() => onNavigate("inventory")}>＋ Transaksi Baru</button></div>
+    <div className="welcome"><div><h2>Selamat datang, {name} <span>👋</span></h2><p>Berikut ringkasan aktivitas operasional perusahaan hari ini.</p></div>{canAccessInventory && <button className="primary-button" onClick={() => onNavigate("inventory")}>＋ Transaksi Baru</button>}</div>
     <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><div className={`metric-icon ${metric.tone}`}>{metric.icon}</div><div><p>{metric.label}</p><h3>{metric.value}</h3><small className={metric.tone}>{metric.note}</small></div></article>)}</div>
     <div className="dashboard-grid">
       <article className="panel movement-panel"><div className="panel-header"><div><h3>Pergerakan Stok Terkini</h3><p>Aktivitas inventory hari ini</p></div><button className="link-button" onClick={() => onNavigate("inventory")}>Lihat semua →</button></div><div className="table-wrap"><table><thead><tr><th>KODE</th><th>BARANG</th><th>AKTIVITAS</th><th>QTY</th><th>WAKTU</th></tr></thead><tbody>{movements.map(([code, item, activity, quantity, date, color]) => <tr key={code}><td className="code">{code}</td><td><strong>{item}</strong></td><td><span className={`badge ${color}`}>{activity}</span></td><td className={color === "red" ? "qty-minus" : "qty-plus"}>{quantity}</td><td className="muted">{date}</td></tr>)}</tbody></table></div></article>

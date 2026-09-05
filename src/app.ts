@@ -11,12 +11,33 @@ export const app = express();
 
 app.use(express.json());
 
-type AuthenticatedRequest = express.Request & { auth?: { userId: string; username: string; roles: string[] } };
-function requireAuth(request: AuthenticatedRequest, response: express.Response, next: express.NextFunction) {
+type AuthenticatedUser = { userId: string; username: string; fullName: string; roles: string[]; permissions: string[] };
+type AuthenticatedRequest = express.Request & { auth?: AuthenticatedUser };
+async function requireAuth(request: AuthenticatedRequest, response: express.Response, next: express.NextFunction) {
   const token = request.headers.authorization?.replace(/^Bearer\s+/i, "");
   if (!token) { response.status(401).json({ message: "Silakan login terlebih dahulu." }); return; }
-  try { request.auth = jwt.verify(token, env.jwtSecret) as AuthenticatedRequest["auth"]; next(); }
-  catch { response.status(401).json({ message: "Sesi tidak valid atau sudah berakhir." }); }
+  try {
+    const decoded = jwt.verify(token, env.jwtSecret) as { userId?: string };
+    if (!decoded.userId) throw new Error("INVALID_TOKEN");
+    const connection = await getDatabasePool();
+    const result = await connection.request().input("userId", sql.UniqueIdentifier, decoded.userId).query<{ userId: string; username: string; fullName: string; roles: string | null; permissions: string | null }>(`
+      SELECT u.user_id AS userId,u.username,u.full_name AS fullName,
+        (SELECT STRING_AGG(role_codes.code,',') FROM (SELECT DISTINCT r.code FROM dbo.user_roles ur JOIN dbo.roles r ON r.role_id=ur.role_id WHERE ur.user_id=u.user_id) role_codes) AS roles,
+        (SELECT STRING_AGG(permission_codes.code,',') FROM (SELECT DISTINCT p.code FROM dbo.user_roles ur JOIN dbo.role_permissions rp ON rp.role_id=ur.role_id JOIN dbo.permissions p ON p.permission_id=rp.permission_id WHERE ur.user_id=u.user_id) permission_codes) AS permissions
+      FROM dbo.users u WHERE u.user_id=@userId AND u.is_active=1;
+    `);
+    const user = result.recordset[0];
+    if (!user) { response.status(401).json({ message: "Akun tidak aktif atau tidak ditemukan." }); return; }
+    request.auth = { userId: user.userId, username: user.username, fullName: user.fullName, roles: user.roles?.split(",") ?? [], permissions: user.permissions?.split(",") ?? [] };
+    next();
+  } catch (error) {
+    if (error instanceof jwt.JsonWebTokenError || error instanceof jwt.TokenExpiredError || (error instanceof Error && error.message === "INVALID_TOKEN")) {
+      response.status(401).json({ message: "Sesi tidak valid atau sudah berakhir." });
+      return;
+    }
+    console.error("Authentication check failed:", error);
+    response.status(503).json({ message: "Sesi tidak dapat diverifikasi karena database tidak tersedia." });
+  }
 }
 
 function requireAdministrator(request: AuthenticatedRequest, response: express.Response, next: express.NextFunction) {
@@ -32,11 +53,7 @@ function requirePermission(permissionCode: string) {
     if (request.auth?.roles.includes("administrator")) { next(); return; }
     try {
       const connection = await getDatabasePool();
-      const result = await connection.request()
-        .input("userId", sql.UniqueIdentifier, request.auth!.userId)
-        .input("permissionCode", sql.NVarChar(100), permissionCode)
-        .query("SELECT TOP 1 1 AS allowed FROM dbo.user_roles ur JOIN dbo.role_permissions rp ON rp.role_id=ur.role_id JOIN dbo.permissions p ON p.permission_id=rp.permission_id WHERE ur.user_id=@userId AND p.code=@permissionCode;");
-      if (!result.recordset.length) { response.status(403).json({ message: "Anda tidak memiliki permission untuk fitur ini." }); return; }
+      if (!request.auth?.permissions.includes(permissionCode)) { response.status(403).json({ message: "Anda tidak memiliki permission untuk fitur ini." }); return; }
       next();
     } catch (error) {
       console.error("Permission check failed:", error);
@@ -66,7 +83,7 @@ app.post("/api/auth/bootstrap", async (request, response) => {
       INSERT dbo.user_roles(user_id,role_id) SELECT user_id,(SELECT role_id FROM dbo.roles WHERE code=N'administrator') FROM @newUsers; SELECT user_id AS userId FROM @newUsers;
     `);
     const userId = created.recordset[0].userId;
-    const token = jwt.sign({ userId, username: username.trim(), roles: ["administrator"] }, env.jwtSecret, { expiresIn: "8h" });
+    const token = jwt.sign({ userId }, env.jwtSecret, { expiresIn: "8h" });
     response.status(201).json({ token, user: { userId, username: username.trim(), fullName: fullName.trim(), roles: ["administrator"] } });
   } catch (error) { console.error("Bootstrap admin failed:", error); response.status(500).json({ message: "Administrator gagal dibuat." }); }
 });
@@ -82,7 +99,9 @@ app.post("/api/auth/login", async (request, response) => {
     const user = result.recordset[0];
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) { response.status(401).json({ message: "Username atau password ERP salah." }); return; }
     const roles = user.roles?.split(",") ?? [];
-    const token = jwt.sign({ userId: user.userId, username: user.username, roles }, env.jwtSecret, { expiresIn: "8h" });
+    await connection.request().input("userId", sql.UniqueIdentifier, user.userId)
+      .query("UPDATE dbo.users SET last_login_at=SYSUTCDATETIME() WHERE user_id=@userId; INSERT dbo.audit_logs(user_id,action,entity_type,entity_id) VALUES(@userId,N'auth.login',N'user',CONVERT(NVARCHAR(100),@userId));");
+    const token = jwt.sign({ userId: user.userId }, env.jwtSecret, { expiresIn: "8h" });
     response.json({ token, user: { userId: user.userId, username: user.username, fullName: user.fullName, roles } });
   } catch (error) {
     console.error("Login database connection failed:", error);
@@ -111,17 +130,18 @@ app.get("/api/admin/users", requireAuth, requireAdministrator, async (_request, 
     const connection = await getDatabasePool();
     const result = await connection.request().query(`
       SELECT u.user_id AS userId, u.username, u.full_name AS fullName, u.email,
-        u.is_active AS isActive, u.created_at AS createdAt,
+        u.is_active AS isActive, u.created_at AS createdAt, u.department_id AS departmentId,
         d.name AS departmentName,
-        STRING_AGG(r.name, ', ') WITHIN GROUP (ORDER BY r.name) AS roles
+        STRING_AGG(r.name, ', ') WITHIN GROUP (ORDER BY r.name) AS roles,
+        STRING_AGG(CONVERT(NVARCHAR(20),r.role_id), ',') WITHIN GROUP (ORDER BY r.name) AS roleIds
       FROM dbo.users u
       LEFT JOIN dbo.departments d ON d.department_id=u.department_id
       LEFT JOIN dbo.user_roles ur ON ur.user_id=u.user_id
       LEFT JOIN dbo.roles r ON r.role_id=ur.role_id
-      GROUP BY u.user_id,u.username,u.full_name,u.email,u.is_active,u.created_at,d.name
+      GROUP BY u.user_id,u.username,u.full_name,u.email,u.is_active,u.created_at,u.department_id,d.name
       ORDER BY u.created_at DESC;
     `);
-    response.json({ users: result.recordset });
+    response.json({ users: result.recordset.map((user: Record<string, unknown> & { roleIds?: string | null }) => ({ ...user, roleIds: user.roleIds?.split(",").map(Number) ?? [] })) });
   } catch (error) {
     console.error("User list failed:", error);
     response.status(503).json({ message: "Daftar pengguna gagal dimuat." });
@@ -229,6 +249,55 @@ app.post("/api/admin/users", requireAuth, requireAdministrator, async (request: 
     await transaction.rollback().catch(() => undefined);
     console.error("Create user failed:", error);
     response.status(409).json({ message: "Pengguna gagal dibuat. Pastikan username/email unik dan master data valid." });
+  }
+});
+
+app.put("/api/admin/users/:userId/access", requireAuth, requireAdministrator, async (request: AuthenticatedRequest, response) => {
+  const { userId } = request.params;
+  const departmentId = Number(request.body?.departmentId);
+  const roleIds = Array.isArray(request.body?.roleIds) ? [...new Set(request.body.roleIds.map(Number))] : null;
+  if (!Number.isInteger(departmentId) || !roleIds?.length || roleIds.some((id) => !Number.isInteger(id))) {
+    response.status(400).json({ message: "Departemen dan minimal satu role wajib dipilih." });
+    return;
+  }
+  const connection = await getDatabasePool();
+  const transaction = new sql.Transaction(connection);
+  try {
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    const target = await new sql.Request(transaction).input("userId", sql.UniqueIdentifier, userId).query<{ isActive: boolean; isAdministrator: boolean }>(`
+      SELECT u.is_active AS isActive,IIF(EXISTS(SELECT 1 FROM dbo.user_roles ur JOIN dbo.roles r ON r.role_id=ur.role_id WHERE ur.user_id=u.user_id AND r.code=N'administrator'),1,0) AS isAdministrator
+      FROM dbo.users u WITH(UPDLOCK,HOLDLOCK) WHERE u.user_id=@userId;
+    `);
+    if (!target.recordset.length) throw new Error("USER_NOT_FOUND");
+
+    const validDepartment = await new sql.Request(transaction).input("departmentId", sql.Int, departmentId).query("SELECT 1 AS valid FROM dbo.departments WHERE department_id=@departmentId AND is_active=1;");
+    const validRoles = await new sql.Request(transaction).input("roleIds", sql.NVarChar(sql.MAX), JSON.stringify(roleIds))
+      .query<{ total: number; includesAdministrator: boolean }>("SELECT COUNT(*) AS total,CONVERT(BIT,MAX(IIF(code=N'administrator',1,0))) AS includesAdministrator FROM dbo.roles WHERE role_id IN (SELECT TRY_CONVERT(INT,[value]) FROM OPENJSON(@roleIds));");
+    if (!validDepartment.recordset.length || validRoles.recordset[0].total !== roleIds.length) throw new Error("INVALID_ACCESS");
+
+    if (target.recordset[0].isAdministrator && !validRoles.recordset[0].includesAdministrator) {
+      const otherAdmins = await new sql.Request(transaction).input("userId", sql.UniqueIdentifier, userId).query<{ total: number }>(`
+        SELECT COUNT(DISTINCT u.user_id) AS total FROM dbo.users u JOIN dbo.user_roles ur ON ur.user_id=u.user_id JOIN dbo.roles r ON r.role_id=ur.role_id WHERE u.is_active=1 AND r.code=N'administrator' AND u.user_id<>@userId;
+      `);
+      if (otherAdmins.recordset[0].total === 0) throw new Error("LAST_ADMIN");
+    }
+
+    await new sql.Request(transaction).input("userId", sql.UniqueIdentifier, userId).input("departmentId", sql.Int, departmentId)
+      .query("UPDATE dbo.users SET department_id=@departmentId,updated_at=SYSUTCDATETIME() WHERE user_id=@userId; DELETE dbo.user_roles WHERE user_id=@userId;");
+    for (const roleId of roleIds) {
+      await new sql.Request(transaction).input("userId", sql.UniqueIdentifier, userId).input("roleId", sql.Int, roleId).input("assignedBy", sql.UniqueIdentifier, request.auth!.userId)
+        .query("INSERT dbo.user_roles(user_id,role_id,assigned_by) VALUES(@userId,@roleId,@assignedBy);");
+    }
+    await new sql.Request(transaction).input("actorId", sql.UniqueIdentifier, request.auth!.userId).input("entityId", sql.NVarChar(100), userId).input("values", sql.NVarChar(sql.MAX), JSON.stringify({ departmentId, roleIds }))
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id,current_values) VALUES(@actorId,N'users.access.update',N'user',@entityId,@values);");
+    await transaction.commit();
+    response.json({ message: "Departemen dan role pengguna berhasil diperbarui." });
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    const code = error instanceof Error ? error.message : "";
+    const status = code === "USER_NOT_FOUND" ? 404 : code === "LAST_ADMIN" ? 409 : 400;
+    const message = code === "USER_NOT_FOUND" ? "Pengguna tidak ditemukan." : code === "LAST_ADMIN" ? "Role Administrator terakhir tidak boleh dihapus." : "Akses pengguna gagal diperbarui.";
+    response.status(status).json({ message });
   }
 });
 

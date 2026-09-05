@@ -12,6 +12,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "verify": "npm run typecheck && npm run typecheck:web && npm run build",
     "db:migrate": "tsx src/scripts/migrate.ts"
   },
   "devDependencies": {

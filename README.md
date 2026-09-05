@@ -181,10 +181,46 @@ tcp:PUBLIC_IP,1433
 ## Tahap fitur saat ini
 
 - Dashboard, koneksi SQL Server, migrasi otomatis, dan kesiapan local/Heroku.
-- Login serta bootstrap Administrator pertama dengan JWT dan bcrypt.
-- User & Akses: daftar pengguna, tambah akun, pilih departemen/role, aktif/nonaktif akun, serta editor permission per role.
+- Login serta bootstrap Administrator pertama dengan JWT dan bcrypt; status aktif, role, dan permission divalidasi ulang pada setiap request.
+- User & Akses: daftar pengguna, tambah akun, ubah departemen/multi-role, aktif/nonaktif akun, serta editor permission per role.
 - Inventory awal: master barang, ringkasan stok, serta transaksi masuk/keluar.
 
 Permission `inventory.read` dan `inventory.manage` sudah diterapkan pada API. Administrator selalu mempunyai akses penuh; role lain mengikuti permission yang disimpan melalui menu **User & Akses → Role & Permission**.
 
-Tahap lanjutan yang belum dikerjakan adalah perubahan role milik pengguna yang sudah ada, Purchasing, PPIC/Produksi, Quality Control, Finance, laporan dinamis, dan pengujian otomatis yang lebih lengkap.
+Role operasional mempunyai permission awal yang aman: Warehouse Staff dapat membaca/mengelola inventory, sedangkan Manager, PPIC, QC, dan Finance mendapat akses baca. Administrator dapat menyesuaikannya melalui editor permission.
+
+Tahap lanjutan yang belum dikerjakan adalah Purchasing, PPIC/Produksi, Quality Control, Finance, laporan dinamis, dan pengujian otomatis yang lebih lengkap.
+
+## Memperbarui deployment Heroku
+
+Setiap selesai mengubah aplikasi, jalankan pemeriksaan lengkap dari root project:
+
+```powershell
+npm run verify
+```
+
+Periksa file yang akan dikirim, buat commit baru, lalu push branch `main` ke aplikasi Heroku yang sudah terhubung:
+
+```powershell
+git status
+git add .
+git status
+git commit -m "Jelaskan perubahan terbaru"
+git push heroku main
+```
+
+Pastikan release baru berhasil sebelum menganggap deployment selesai:
+
+```powershell
+heroku releases -a ppic11
+heroku ps -a ppic11
+heroku logs --tail -a ppic11
+```
+
+Jika release gagal, lihat output release yang gagal dengan mengganti nomor versinya:
+
+```powershell
+heroku releases:output vN -a ppic11
+```
+
+Perubahan Config Vars membuat release baru secara otomatis. Pastikan release tersebut berstatus berhasil sebelum menjalankan atau memeriksa dyno `web`.
