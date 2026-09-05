@@ -8,6 +8,7 @@ import { env, hasConfiguredDatabase, saveDatabaseConnection, setDatabaseConnecti
 import { runMigrations } from "./database/migrations.js";
 import { activateDatabaseConnection, checkDatabaseConnection, closeDatabaseConnection, getDatabasePool } from "./database/sql-server.js";
 import { createDemoExcel, createDemoPdf } from "./exports/demo-export.js";
+import { defaultBranding, parseBranding, readBranding, saveBranding, type Branding } from "./settings/branding.js";
 
 export const app = express();
 
@@ -357,6 +358,12 @@ app.get("/api/setup/status", (_request, response) => {
   response.json({ databaseConfigured: hasConfiguredDatabase(), storage: process.env.DYNO ? "dyno-memory" : "local-env" });
 });
 
+app.get("/api/branding", async (_request, response) => {
+  if(!hasConfiguredDatabase()){response.json(defaultBranding);return;}
+  try{response.json(await readBranding(await getDatabasePool()));}
+  catch{response.json(defaultBranding);}
+});
+
 function parseDatabaseConnection(body: Record<string, unknown>) {
   const { server, database, user, password, encrypt, trustServerCertificate } = body;
   const serverMatch = typeof server === "string" ? server.trim().match(/^tcp:([^,\s]+),(\d{1,5})$/i) : null;
@@ -366,7 +373,7 @@ function parseDatabaseConnection(body: Record<string, unknown>) {
 }
 
 let databaseSetupInProgress = false;
-async function connectAndPrepareDatabase(request: express.Request, response: express.Response) {
+async function connectAndPrepareDatabase(request: express.Request, response: express.Response, initialBranding?: Branding) {
   const submittedConnection = parseDatabaseConnection(request.body ?? {});
   if (!submittedConnection) { response.status(400).json({ message: "Gunakan format tcp:HOST,PORT lalu isi database, username, dan password." }); return; }
   if (databaseSetupInProgress) { response.status(409).json({ message: "Konfigurasi database sedang diproses. Tunggu beberapa saat lalu coba kembali." }); return; }
@@ -375,10 +382,12 @@ async function connectAndPrepareDatabase(request: express.Request, response: exp
   try {
     const active = await activateDatabaseConnection(submittedConnection);
     const migrations = await runMigrations(active.pool);
+    if(initialBranding) await saveBranding(active.pool,initialBranding,null);
+    const branding=await readBranding(active.pool);
     const saved = !process.env.DYNO;
     if (saved) await saveDatabaseConnection(submittedConnection);
     const users = await active.pool.request().query<{ total: number }>("SELECT COUNT(*) AS total FROM dbo.users;");
-    response.json({ status: "connected", database: active.databaseName, server: active.serverName, saved, migrations, needsBootstrap: users.recordset[0].total === 0,
+    response.json({ status: "connected", database: active.databaseName, server: active.serverName, saved, migrations, needsBootstrap: users.recordset[0].total === 0, branding,
       message: saved ? "Koneksi aktif dan tersimpan untuk lokal." : "Koneksi aktif pada dyno Heroku ini." });
   } catch (error) {
     await closeDatabaseConnection().catch(() => undefined);
@@ -392,7 +401,9 @@ async function connectAndPrepareDatabase(request: express.Request, response: exp
 
 app.post("/api/setup/database", async (request, response) => {
   if (hasConfiguredDatabase()) { response.status(409).json({ message: "Database sudah aktif. Login sebagai Administrator untuk menggantinya." }); return; }
-  await connectAndPrepareDatabase(request, response);
+  const branding=parseBranding(request.body??{});
+  if(!branding){response.status(400).json({message:"Nama ERP harus 2-40 karakter dan nama perusahaan 2-120 karakter."});return;}
+  await connectAndPrepareDatabase(request, response, branding);
 });
 
 app.get("/api/database/config", requireAuth, requireAdministrator, (_request, response) => {
@@ -407,6 +418,17 @@ app.get("/api/database/config", requireAuth, requireAdministrator, (_request, re
 
 app.post("/api/database/test-connection", requireAuth, requireAdministrator, async (request, response) => {
   await connectAndPrepareDatabase(request, response);
+});
+
+app.put("/api/settings/branding",requireAuth,requireAdministrator,async(request:AuthenticatedRequest,response)=>{
+  const branding=parseBranding(request.body??{});
+  if(!branding){response.status(400).json({message:"Nama ERP harus 2-40 karakter dan nama perusahaan 2-120 karakter."});return;}
+  try{
+    const connection=await getDatabasePool(); await saveBranding(connection,branding,request.auth!.userId);
+    await connection.request().input("userId",sql.UniqueIdentifier,request.auth!.userId).input("values",sql.NVarChar(sql.MAX),JSON.stringify(branding))
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id,current_values) VALUES(@userId,N'settings.branding.update',N'application_settings',N'branding',@values);");
+    response.json({message:"Identitas aplikasi berhasil disimpan.",branding});
+  }catch(error){console.error("Branding update failed:",error);response.status(500).json({message:"Identitas aplikasi gagal disimpan."});}
 });
 
 const demoModules = new Set(["ppic", "quality", "finance", "reports"]);
@@ -458,10 +480,12 @@ app.get("/api/demo/:module/export/:format", requireAuth, async (request,response
   const format=String(request.params.format).toLowerCase(); if(!["xlsx","pdf"].includes(format)){ response.status(400).json({message:"Format ekspor harus xlsx atau pdf."}); return; }
   try {
     const records=await readDemoRecords(moduleCode); if(!records.length){ response.status(404).json({message:"Belum ada data SQL untuk diekspor. Kirim data demo terlebih dahulu."}); return; }
-    const buffer=format==="xlsx" ? await createDemoExcel(moduleCode,records) : await createDemoPdf(moduleCode,records);
+    const branding=await readBranding(await getDatabasePool());
+    const buffer=format==="xlsx" ? await createDemoExcel(moduleCode,records,branding) : await createDemoPdf(moduleCode,records,branding);
     response.setHeader("Content-Type",format==="xlsx"?"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"application/pdf");
     response.setHeader("Cache-Control","no-store");
-    response.setHeader("Content-Disposition",`attachment; filename="erpjin-${moduleCode}.${format}"`); response.send(buffer);
+    const filePrefix=branding.appName.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"erp";
+    response.setHeader("Content-Disposition",`attachment; filename="${filePrefix}-${moduleCode}.${format}"`); response.send(buffer);
   } catch(error){ console.error("Export demo records failed:",error); response.status(500).json({message:"File ekspor gagal dibuat."}); }
 });
 

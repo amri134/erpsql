@@ -14,6 +14,7 @@ import { FinancePage, ProductionPage, QualityPage, ReportsPage } from "./demo/De
 
 type MenuKey = "dashboard" | "inventory" | "purchasing" | "ppic" | "quality" | "finance" | "reports" | "users" | "settings";
 type CurrentUser = { userId: string; username: string; fullName: string; roles: string[]; permissions: string[] };
+export type Branding = { appName: string; companyName: string };
 
 type ConnectionConfig = {
   server: string;
@@ -66,6 +67,7 @@ function App() {
   const [password, setPassword] = useState("");
   const [isTesting, setIsTesting] = useState(false);
   const [connectionResult, setConnectionResult] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [branding,setBranding]=useState<Branding>({appName:"ERPJIN",companyName:"PT Hajijin Amri"});
 
   useEffect(() => {
     if (!token) return;
@@ -76,6 +78,9 @@ function App() {
   }, [token]);
 
   useEffect(() => { fetch("/api/setup/status").then((response) => response.json()).then((data) => setDatabaseConfigured(Boolean(data.databaseConfigured))).catch(() => setDatabaseConfigured(false)); }, []);
+
+  useEffect(()=>{if(!databaseConfigured)return;fetch("/api/branding").then((response)=>response.json()).then((data:Branding)=>setBranding(data)).catch(()=>undefined);},[databaseConfigured]);
+  useEffect(()=>{document.title=`${branding.appName} — ${branding.companyName}`;},[branding]);
 
   useEffect(() => {
     if (!databaseConfigured) { setNeedsBootstrap(null); return; }
@@ -111,6 +116,7 @@ function App() {
       window.alert(`${data.message} Database aktif: ${data.database}. Silakan login menggunakan akun dari database tersebut.`);
       setPassword("");
       setNeedsBootstrap(Boolean(data.needsBootstrap));
+      if(data.branding) setBranding(data.branding);
       setDatabaseConfigured(true);
       logout();
     } catch (error) {
@@ -127,10 +133,10 @@ function App() {
   function authenticated(newToken: string) { localStorage.setItem("erp_token", newToken); setToken(newToken); setNeedsBootstrap(false); }
   function logout() { localStorage.removeItem("erp_token"); setToken(""); setCurrentUser(null); }
 
-  if (databaseConfigured === null) return <div className="auth-page"><div className="auth-card"><p>Memeriksa koneksi ERPJIN...</p></div></div>;
-  if (!databaseConfigured) return <DatabaseSetup onConnected={(bootstrap) => { setDatabaseConfigured(true); setNeedsBootstrap(bootstrap); }} />;
-  if (!token) return <AuthScreen needsBootstrap={needsBootstrap} onAuthenticated={authenticated} />;
-  if (!currentUser) return <div className="auth-page"><div className="auth-card"><p>Memverifikasi sesi ERPJIN...</p></div></div>;
+  if (databaseConfigured === null) return <div className="auth-page"><div className="auth-card"><p>Memeriksa koneksi {branding.appName}...</p></div></div>;
+  if (!databaseConfigured) return <DatabaseSetup branding={branding} onConnected={(bootstrap,newBranding) => { setBranding(newBranding);setDatabaseConfigured(true); setNeedsBootstrap(bootstrap); }} />;
+  if (!token) return <AuthScreen branding={branding} needsBootstrap={needsBootstrap} onAuthenticated={authenticated} />;
+  if (!currentUser) return <div className="auth-page"><div className="auth-card"><p>Memverifikasi sesi {branding.appName}...</p></div></div>;
 
   const isAdministrator = currentUser.roles.includes("administrator");
   const canReadInventory = isAdministrator || currentUser.permissions.includes("inventory.read");
@@ -145,8 +151,8 @@ function App() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">E</span><span>ERP<span className="brand-accent">JIN</span></span></div>
-        <div className="workspace"><span className="workspace-dot" /> PT Hajijin Amri <span className="chevron">⌄</span></div>
+        <div className="brand"><span className="brand-mark">{branding.appName.charAt(0).toUpperCase()}</span><span>{branding.appName}</span></div>
+        <div className="workspace"><span className="workspace-dot" /> {branding.companyName} <span className="chevron">⌄</span></div>
         <nav>
           <p className="nav-label">MENU UTAMA</p>
           {mainNavigation.map((item) => <button key={item.key} className={`nav-item ${activeMenu === item.key ? "active" : ""}`} onClick={() => setActiveMenu(item.key)}><span>{item.icon}</span>{item.label}</button>)}
@@ -156,7 +162,7 @@ function App() {
       </aside>
 
       <main>
-        <header className="topbar"><div><p className="breadcrumb">ERPJIN / {pageTitle}</p><h1>{pageTitle}</h1></div><div className="top-actions"><button className="icon-button">⌕</button><button className="notification">♧<i /></button><span className="date">{currentDate}</span></div></header>
+        <header className="topbar"><div><p className="breadcrumb">{branding.appName} / {pageTitle}</p><h1>{pageTitle}</h1></div><div className="top-actions"><button className="icon-button">⌕</button><button className="notification">♧<i /></button><span className="date">{currentDate}</span></div></header>
         <section className="content">
           {activeMenu === "dashboard" && <Dashboard name={currentUser.fullName} canAccessInventory={canReadInventory} onNavigate={setActiveMenu} />}
           {activeMenu === "inventory" && <InventoryPage token={token} />}
@@ -166,7 +172,7 @@ function App() {
           {activeMenu === "finance" && <FinancePage />}
           {activeMenu === "reports" && <ReportsPage />}
           {activeMenu === "users" && <UserManagement token={token} />}
-          {activeMenu === "settings" && <DatabaseSettings config={config} password={password} testing={isTesting} result={connectionResult} onPassword={setPassword} onConfig={(key, value) => setConfig((current) => ({ ...current, [key]: value }))} onSubmit={testConnection} />}
+          {activeMenu === "settings" && <DatabaseSettings token={token} branding={branding} onBrandingSaved={setBranding} config={config} password={password} testing={isTesting} result={connectionResult} onPassword={setPassword} onConfig={(key, value) => setConfig((current) => ({ ...current, [key]: value }))} onSubmit={testConnection} />}
         </section>
       </main>
     </div>

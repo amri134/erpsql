@@ -9,3 +9,4 @@
   font: 600 12px Consolas, monospace;
   white-space: nowrap;
 }
+.identity-preview{display:flex;align-items:center;gap:12px;margin:22px 0;padding:16px;border:1px solid #dbe7f7;border-radius:9px;background:#f7faff}.identity-preview>span{width:42px;height:42px;display:grid;place-items:center;border-radius:10px;color:#fff;background:linear-gradient(135deg,#48a4ff,#5068ec);font:800 18px Manrope}.identity-preview strong,.identity-preview small{display:block}.identity-preview strong{font:800 17px Manrope;color:#1c2b45}.identity-preview small{margin-top:3px;color:#7c899d;font-size:11px}

@@ -9,6 +9,7 @@ Live demo: [ppic11-becda168e223.herokuapp.com](https://ppic11-becda168e223.herok
 ## Highlights
 
 - Wizard koneksi Microsoft SQL Server sebelum login.
+- Nama ERP dan nama perusahaan dapat dikustomisasi per database.
 - Migrasi schema otomatis setelah koneksi berhasil.
 - Bootstrap Administrator pertama untuk setiap database baru.
 - Login JWT, password bcrypt, role, permission, dan audit log.
@@ -55,6 +56,7 @@ flowchart TD
 | Area | Capability |
 | --- | --- |
 | Connection setup | Format `tcp:HOST,PORT`, connection test, automatic migrations, and local save |
+| Application identity | Custom ERP and company names for login, dashboard, browser title, PDF, and Excel |
 | Authentication | First Administrator bootstrap, login, JWT session, bcrypt password hash |
 | User & Access | User creation, department, multi-role, active status, and permission editor |
 | Inventory | Item master, categories, units, warehouses, current stock, and stock transactions |
@@ -96,6 +98,8 @@ tcp:PUBLIC_IP,1433
 ```
 
 Jika Administrator mengganti koneksi dari SQL A ke SQL B, connection pool SQL A ditutup, migrasi SQL B dijalankan, dan sesi pengguna dihapus. Login berikutnya menggunakan akun yang tersimpan pada SQL B.
+
+Nama ERP dan nama perusahaan diisi saat wizard koneksi pertama. Administrator dapat mengubahnya kembali melalui **Pengaturan → Profil Perusahaan**. Identitas disimpan pada database aktif, sehingga SQL A dan SQL B dapat mempunyai nama aplikasi/perusahaan yang berbeda.
 
 ## Local setup
 
