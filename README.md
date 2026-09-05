@@ -1,144 +1,184 @@
 # ERPJIN — PT Hajijin Amri
 
-Backend awal untuk sistem ERP, memakai Node.js, TypeScript, Express, dan Microsoft SQL Server.
+ERPJIN adalah dashboard Enterprise Resource Planning berbasis web untuk demonstrasi alur operasional perusahaan manufaktur. Aplikasi menggabungkan autentikasi multi-user, role dan permission, Inventory, Purchasing, PPIC, Quality Control, Finance, laporan, serta koneksi Microsoft SQL Server yang dapat dikonfigurasi sebelum login.
 
-## Menjalankan proyek
+Live demo: [ppic11-becda168e223.herokuapp.com](https://ppic11-becda168e223.herokuapp.com/)
 
-1. File `.env` bersifat opsional. Jika belum berisi koneksi, aplikasi menampilkan wizard SQL Server sebelum login. Gunakan `DB_USERNAME`, bukan `USERNAME`, bila memilih menyimpan koneksi lokal.
-2. Pasang dependensi:
+> ERPJIN saat ini merupakan project demo dan pembelajaran. Data PPIC, Quality Control, Finance, dan sebagian dashboard berasal dari generator sintetis. Jangan gunakan konfigurasi demo ini sebagai sistem ERP produksi tanpa hardening keamanan dan penyimpanan kredensial yang permanen.
 
-   ```powershell
-   npm install
-   ```
+## Highlights
 
-3. Jalankan backend saat pengembangan:
+- Wizard koneksi Microsoft SQL Server sebelum login.
+- Migrasi schema otomatis setelah koneksi berhasil.
+- Bootstrap Administrator pertama untuk setiap database baru.
+- Login JWT, password bcrypt, role, permission, dan audit log.
+- Pergantian SQL Server melalui halaman Pengaturan; sesi lama otomatis berakhir.
+- Inventory dan Purchasing menggunakan data SQL Server.
+- Modul demo PPIC, Quality Control, Finance, dan Laporan.
+- Data generator dapat dikirim ke SQL dan dimuat kembali untuk menguji koneksi.
+- Ekspor data SQL ke PDF dan Excel `.xlsx`.
+- Siap dijalankan secara lokal atau pada satu dyno Heroku.
 
-   ```powershell
-   npm run dev
-   ```
+## Demo mode and safety
 
-Server tersedia di `http://localhost:3000` secara bawaan. Ubah `APP_PORT` dalam `.env` bila diperlukan.
+Dalam mode demo:
 
-## Menjalankan dashboard
+- Dashboard menggunakan kombinasi data sintetis dan data SQL.
+- PPIC, Quality Control, Finance, dan katalog Laporan dimulai dari data generator.
+- Tombol **Kirim ke SQL** melakukan sinkronisasi idempotent ke database aktif.
+- Tombol **Muat dari SQL** mengambil kembali data dari database aktif.
+- Ekspor PDF dan Excel selalu menggunakan data yang sudah tersimpan di SQL.
+- Password SQL tidak pernah dikirim kembali ke browser.
+- File `.env` dikecualikan dari Git.
+- Pada Heroku, koneksi SQL hanya disimpan di memori satu dyno dan hilang ketika dyno restart.
 
-Jalankan backend dan dashboard pada dua terminal terpisah dari root project:
+Gunakan firewall `0.0.0.0/0` hanya untuk pengujian singkat. Untuk penggunaan nyata, batasi port SQL Server `1433` ke sumber jaringan yang diperlukan dan gunakan sertifikat TLS yang valid.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    U[User] --> W[SQL connection wizard]
+    W --> M[Automatic migrations]
+    M --> A[Bootstrap or login]
+    A --> J[JWT session]
+    J --> API[Express API]
+    API --> DB[(Microsoft SQL Server)]
+    API --> E[PDF and Excel exporter]
+    DB --> R[React dashboard]
+    G[Synthetic data generator] --> R
+    G -->|Kirim ke SQL| API
+```
+
+## Features
+
+| Area | Capability |
+| --- | --- |
+| Connection setup | Format `tcp:HOST,PORT`, connection test, automatic migrations, and local save |
+| Authentication | First Administrator bootstrap, login, JWT session, bcrypt password hash |
+| User & Access | User creation, department, multi-role, active status, and permission editor |
+| Inventory | Item master, categories, units, warehouses, current stock, and stock transactions |
+| Purchasing | Supplier master, multi-item purchase requests, estimated value, approval, and rejection |
+| PPIC & Production | Work orders, production targets, realization, progress, and line capacity demo |
+| Quality Control | Batch inspections, pass rate, defect rate, hold status, and corrective action demo |
+| Finance | Receivables, payables, payments, cash-flow chart, and cost composition demo |
+| Reports | Report catalog, search, period selection, preview, CSV, PDF, and Excel export |
+| Demo SQL sync | Idempotent synthetic-data synchronization and SQL read-back verification |
+| Audit | Login, access changes, user changes, purchasing decisions, and demo synchronization |
+
+## Tech stack
+
+- React 19 + TypeScript + Vite
+- Node.js 24 + Express 5
+- Microsoft SQL Server + `mssql` / Tedious
+- JWT + bcryptjs
+- ExcelJS for `.xlsx` export
+- PDFKit for PDF export
+- Node test runner
+- Heroku with `web` and `release` process types
+
+## Connection flow
+
+```text
+Isi koneksi SQL
+        ↓
+Uji koneksi dan jalankan migrasi
+        ↓
+Buat Administrator pertama atau login
+        ↓
+Gunakan dashboard dan data SQL aktif
+```
+
+Format server mengikuti `sqlcmd`:
+
+```text
+tcp:PUBLIC_IP,1433
+```
+
+Jika Administrator mengganti koneksi dari SQL A ke SQL B, connection pool SQL A ditutup, migrasi SQL B dijalankan, dan sesi pengguna dihapus. Login berikutnya menggunakan akun yang tersimpan pada SQL B.
+
+## Local setup
+
+### 1. Install dependencies
 
 ```powershell
-# Terminal 1 — API dan koneksi SQL Server
+npm install
+```
+
+### 2. Configure environment
+
+Salin `.env.example` menjadi `.env`. Koneksi database boleh dikosongkan agar wizard tampil sebelum login.
+
+```env
+SERVER=
+DB_PORT=1433
+DATABASE=
+DB_USERNAME=
+PASSWORD=
+APP_PORT=3000
+JWT_SECRET=
+```
+
+Gunakan `DB_USERNAME`, bukan `USERNAME`, karena Windows menggunakan `USERNAME` untuk akun sistem. Jangan commit `.env`.
+
+### 3. Run the application
+
+Untuk menjalankan backend dan production frontend yang sudah dibangun:
+
+```powershell
+npm run build
+npm start
+```
+
+Buka `http://localhost:3000`.
+
+Untuk development dengan hot reload, gunakan dua terminal:
+
+```powershell
+# Terminal 1
 npm run dev
 ```
 
 ```powershell
-# Terminal 2 — dashboard React
+# Terminal 2
 npm run dev:web
 ```
 
-Buka `http://localhost:5173`. Alurnya adalah **hubungkan SQL Server → migrasi schema otomatis → buat Administrator pertama atau login → dashboard**. Koneksi lokal yang berhasil disimpan ke `.env`. Perubahan dari menu **Pengaturan** mengaktifkan database baru dan mengeluarkan sesi lama agar pengguna login dengan akun milik database baru tersebut.
+Buka `http://localhost:5173`.
 
-## Endpoint awal
+### 4. Run migrations manually
 
-- `GET /health` — memastikan server Express berjalan.
-- `GET /health/db` — menguji koneksi aplikasi ke SQL Server dan menampilkan nama server/database saja. Password tidak pernah dikembalikan.
-
-Contoh pengujian dari PowerShell:
-
-```powershell
-Invoke-RestMethod http://localhost:3000/health
-Invoke-RestMethod http://localhost:3000/health/db
-```
-
-Saat koneksi berhasil, endpoint database memberikan respons seperti ini:
-
-```json
-{
-  "status": "ok",
-  "database": "ERPDB",
-  "server": "nama-server-sql"
-}
-```
-
-## Membuat schema akses ERP
-
-Migrasi awal membuat tabel `departments`, `roles`, `permissions`, `users`, `role_permissions`, `user_roles`, dan `audit_logs`, serta data dasar departemen, role, dan permission.
-
-Jalankan dari root project:
+Wizard koneksi menjalankan migrasi secara otomatis. Untuk menjalankannya secara manual pada koneksi `.env`:
 
 ```powershell
 npm run db:migrate
 ```
 
-Migrasi ini aman dijalankan ulang; tabel dan data bawaan hanya dibuat bila belum ada.
+## Testing the SQL demo flow
 
-Migrasi berikutnya menambahkan master data Inventory: kategori, satuan, gudang, barang, dan transaksi stok. Jalankan kembali perintah yang sama setiap ada file migrasi baru.
+Pada halaman PPIC, Quality Control, Finance, atau Laporan:
 
-## Catatan keamanan
+1. Klik **Kirim ke SQL** untuk menyimpan data generator.
+2. Pastikan sumber data berubah menjadi **SQL Server**.
+3. Klik **Data Generator**, lalu **Muat dari SQL** untuk menguji pembacaan ulang.
+4. Klik **PDF** atau **Excel** untuk mengekspor data dari SQL aktif.
 
-- Jangan commit `.env`; file tersebut sudah dikecualikan melalui `.gitignore`.
-- `DB_TRUST_SERVER_CERTIFICATE=true` hanya cocok untuk tahap pengembangan. Produksi harus menggunakan sertifikat TLS SQL Server yang valid dan mengubah nilai tersebut menjadi `false`.
-- Batasi firewall SQL Server ke IP yang perlu mengaksesnya setelah pengujian selesai.
+Sinkronisasi menggunakan kode unik setiap baris. Menekan tombol beberapa kali memperbarui data dan tidak membuat duplikat.
 
-## Deploy ke Heroku
+## Heroku deployment
 
-Project disiapkan sebagai satu aplikasi: Heroku membangun TypeScript dan React, lalu Express menyajikan wizard koneksi, API, dan dashboard. Jika belum ada koneksi, release phase dilewati dengan aman; migrasi berjalan otomatis setelah wizard berhasil terhubung.
+Project dibangun sebagai satu aplikasi. Express menyajikan API dan hasil build React. Release command aman ketika koneksi SQL belum tersedia; migrasi berjalan saat wizard berhasil terhubung.
 
-1. Install Heroku CLI dan login:
-
-   ```powershell
-   heroku login
-   ```
-
-2. Buat repository Git jika belum ada:
-
-   ```powershell
-   git init
-   git add .
-   git commit -m "Prepare ERP application for Heroku"
-   git branch -M main
-   ```
-
-3. Buat aplikasi Heroku:
-
-   ```powershell
-   heroku create NAMA-APLIKASI --stack heroku-26
-   ```
-
-4. Config Vars database tidak diperlukan untuk mode demo ini. Jangan membuat Config Var `PORT`; Heroku mengaturnya otomatis. `JWT_SECRET` juga opsional: bila kosong, aplikasi membuat secret sementara dan sesi login akan berakhir ketika dyno restart.
-
-5. Deploy:
-
-   ```powershell
-   git push heroku main
-   heroku open
-   ```
-
-6. Periksa status dan log bila diperlukan:
-
-   ```powershell
-   heroku ps
-   heroku logs --tail
-   ```
-
-### Dyno dan konfigurasi melalui CLI
-
-Project mempunyai proses `web` untuk Express dan `release` yang aman tanpa database. Gunakan tepat **satu dyno web** karena koneksi demo Heroku disimpan di memori proses.
-
-Untuk demo/pengembangan yang boleh tidur saat tidak aktif, gunakan Eco (memerlukan langganan Eco):
+### 1. Login and create the app
 
 ```powershell
-heroku ps:type web=eco -a NAMA-APLIKASI
-heroku ps:scale web=1 -a NAMA-APLIKASI
+heroku login
+heroku create NAMA-APLIKASI --stack heroku-26
 ```
 
-Untuk penggunaan ERP yang harus selalu tersedia, mulai dari Basic:
+### 2. Configure an optional persistent JWT secret
 
-```powershell
-heroku ps:type web=basic -a NAMA-APLIKASI
-heroku ps:scale web=1 -a NAMA-APLIKASI
-```
-
-Jika ingin sesi JWT tetap berlaku setelah restart, Anda boleh menambahkan satu Config Var `JWT_SECRET`. Ini opsional dan bukan tempat konfigurasi database:
-
-Untuk membuat `JWT_SECRET` pada Windows PowerShell versi lama maupun baru:
+Config Vars database tidak diperlukan untuk mode demo. `JWT_SECRET` bersifat opsional, tetapi dianjurkan agar sesi tidak berubah setiap restart.
 
 ```powershell
 $jwtBytes = New-Object byte[] 48
@@ -146,87 +186,97 @@ $jwtGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
 $jwtGenerator.GetBytes($jwtBytes)
 $jwtSecret = [Convert]::ToBase64String($jwtBytes)
 $jwtGenerator.Dispose()
+heroku config:set JWT_SECRET="$jwtSecret" -a NAMA-APLIKASI
 ```
+
+Jangan membuat Config Var `PORT`; Heroku mengaturnya otomatis.
+
+### 3. Deploy and scale one web dyno
 
 ```powershell
-heroku config:set JWT_SECRET="$jwtSecret" -a NAMA-APLIKASI
-heroku config -a NAMA-APLIKASI
+git push heroku main
+heroku ps:type web=basic -a NAMA-APLIKASI
+heroku ps:scale web=1 -a NAMA-APLIKASI
+heroku open -a NAMA-APLIKASI
 ```
 
-Pada Heroku, koneksi aktif hanya tersimpan di memori dyno. Setelah restart/deploy, wizard akan muncul lagi. Ini sengaja untuk demo tanpa Config Vars; produksi memerlukan penyimpanan terenkripsi eksternal. Untuk SQL Server publik, `0.0.0.0/0` sebaiknya hanya untuk pengujian.
+Gunakan tepat satu dyno karena konfigurasi SQL demo disimpan di memori proses.
 
-## Login pertama
+### 4. Verify the deployment
 
-Buka aplikasi dan isi koneksi SQL Server terlebih dahulu. ERPJIN menjalankan migrasi otomatis. Jika database tersebut belum mempunyai pengguna, halaman meminta pembuatan Administrator pertama; jika sudah, halaman login langsung muncul. Password ERP disimpan sebagai hash bcrypt, bukan teks asli.
-
-Format koneksi pada halaman Settings mengikuti `sqlcmd`:
-
-```text
-tcp:PUBLIC_IP,1433
+```powershell
+heroku releases -a NAMA-APLIKASI
+heroku ps -a NAMA-APLIKASI
+heroku logs --tail -a NAMA-APLIKASI
 ```
 
-## Tahap fitur saat ini
+## Scripts
 
-- Dashboard, koneksi SQL Server, migrasi otomatis, dan kesiapan local/Heroku.
-- Login serta bootstrap Administrator pertama dengan JWT dan bcrypt; status aktif, role, dan permission divalidasi ulang pada setiap request.
-- User & Akses: daftar pengguna, tambah akun, ubah departemen/multi-role, aktif/nonaktif akun, serta editor permission per role.
-- Inventory awal: master barang, ringkasan stok, serta transaksi masuk/keluar.
-- Purchasing awal: supplier, Purchase Request multi-item, estimasi nilai, serta alur persetujuan/penolakan berbasis permission.
-- PPIC & Produksi demo: work order, progres target, utilisasi, downtime, dan kapasitas line.
-- Quality Control demo: inspeksi batch, pass/defect rate, defect utama, dan tindakan korektif.
-- Finance demo: kas, piutang, utang, laba, arus kas, komposisi biaya, dan transaksi.
-- Pusat Laporan demo: pencarian, pilihan periode, pratinjau simulasi, dan ekspor CSV dummy.
-- Sinkronisasi data generator ke SQL Server: PPIC, QC, Finance, dan Laporan dapat mengirim data dummy secara idempotent, memuatnya kembali dari database aktif, serta mengekspor data SQL ke PDF atau Excel.
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Express backend with watch mode |
+| `npm run dev:web` | Start the Vite development server |
+| `npm run build` | Build backend and frontend for production |
+| `npm start` | Run the compiled Express application |
+| `npm run db:migrate` | Apply pending SQL migrations manually |
+| `npm test` | Build the backend and test PDF/Excel generation |
+| `npm run typecheck` | Type-check backend TypeScript |
+| `npm run typecheck:web` | Type-check frontend TypeScript |
+| `npm run verify` | Run backend/frontend checks, tests, and frontend build |
 
-Permission `inventory.read` dan `inventory.manage` sudah diterapkan pada API. Administrator selalu mempunyai akses penuh; role lain mengikuti permission yang disimpan melalui menu **User & Akses → Role & Permission**.
+## Health checks
 
-### Menguji data demo melalui SQL
+```powershell
+Invoke-RestMethod http://localhost:3000/health
+Invoke-RestMethod http://localhost:3000/health/db
+```
 
-Pada modul PPIC, Quality Control, Finance, atau Laporan:
+`/health` memeriksa proses Express. `/health/db` menampilkan nama database dan server aktif tanpa mengembalikan password.
 
-1. **Kirim ke SQL** melakukan upsert data generator ke database yang sedang aktif, lalu membacanya kembali sebagai verifikasi.
-2. **Muat dari SQL** mengganti tabel di layar dengan data yang tersimpan pada SQL Server.
-3. **Data Generator** kembali ke data bawaan tanpa menghapus data SQL.
-4. **PDF** dan **Excel** aktif setelah data SQL berhasil dimuat. File ekspor selalu dibuat dari database aktif, bukan langsung dari data browser.
+## Security notes
 
-Sinkronisasi bersifat idempotent berdasarkan kode unik setiap baris sehingga menekan tombol berulang kali memperbarui data, bukan menggandakannya.
+- Password ERP disimpan sebagai hash bcrypt.
+- JWT, status aktif, role, dan permission diverifikasi kembali melalui SQL.
+- Query aplikasi menggunakan parameter SQL untuk data pengguna.
+- Perubahan akses dan sinkronisasi demo dicatat pada audit log.
+- API mengirim header `nosniff`, perlindungan iframe, dan referrer policy.
+- File ekspor menggunakan `Cache-Control: no-store`.
+- `DB_TRUST_SERVER_CERTIFICATE=true` hanya cocok untuk development atau sertifikat self-signed yang dipercaya secara eksplisit.
+- Jangan masukkan password, `.env`, backup database, atau token ke repository GitHub.
 
-Role operasional mempunyai permission awal yang aman: Warehouse Staff dapat membaca/mengelola inventory, sedangkan Manager, PPIC, QC, dan Finance mendapat akses baca. Administrator dapat menyesuaikannya melalui editor permission.
+## Production readiness
 
-Tahap lanjutan yang belum dikerjakan adalah konversi Purchase Request menjadi Purchase Order, integrasi SQL untuk modul demo PPIC/QC/Finance/Laporan, laporan PDF/XLSX, dan pengujian otomatis yang lebih lengkap.
+Repository ini siap untuk portfolio, pembelajaran, pengujian SQL Server, serta deployment demo lokal/Heroku. Sebelum digunakan sebagai ERP produksi, tambahkan:
 
-## Memperbarui deployment Heroku
+- penyimpanan konfigurasi SQL terenkripsi dan persisten;
+- perlindungan khusus untuk wizard setup;
+- rate limiting login dan session revocation;
+- TLS SQL Server dengan sertifikat valid;
+- backup, restore, monitoring, dan disaster recovery;
+- pengujian integrasi database dan end-to-end;
+- pemisahan data per tenant bila melayani lebih dari satu perusahaan.
 
-Setiap selesai mengubah aplikasi, jalankan pemeriksaan lengkap dari root project:
+## Upload to GitHub
+
+Setelah membuat repository kosong di GitHub:
 
 ```powershell
 npm run verify
-```
-
-Perintah tersebut menjalankan type-check backend/frontend, pengujian otomatis generator PDF/Excel, lalu production build React. Endpoint API juga mengirim header keamanan dasar dan mengembalikan error JSON yang konsisten untuk request API yang tidak valid.
-
-Periksa file yang akan dikirim, buat commit baru, lalu push branch `main` ke aplikasi Heroku yang sudah terhubung:
-
-```powershell
 git status
 git add .
-git status
-git commit -m "Jelaskan perubahan terbaru"
-git push heroku main
+git commit -m "Publish ERPJIN demo dashboard"
+git remote add origin https://github.com/USERNAME/erpjin.git
+git branch -M main
+git push -u origin main
 ```
 
-Pastikan release baru berhasil sebelum menganggap deployment selesai:
+Jika remote `origin` sudah ada, gunakan:
 
 ```powershell
-heroku releases -a ppic11
-heroku ps -a ppic11
-heroku logs --tail -a ppic11
+git remote set-url origin https://github.com/USERNAME/erpjin.git
+git push -u origin main
 ```
 
-Jika release gagal, lihat output release yang gagal dengan mengganti nomor versinya:
+## License
 
-```powershell
-heroku releases:output vN -a ppic11
-```
-
-Perubahan Config Vars membuat release baru secara otomatis. Pastikan release tersebut berstatus berhasil sebelum menjalankan atau memeriksa dyno `web`.
+Project ini ditujukan untuk portfolio, pembelajaran, dan demonstrasi aman. Tinjau kembali keamanan, privasi, lisensi dependency, serta kebutuhan operasional sebelum mengadaptasinya untuk produksi.
