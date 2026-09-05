@@ -401,6 +401,116 @@ app.post("/api/database/test-connection", requireAuth, requireAdministrator, asy
   }
 });
 
+app.get("/api/purchasing/overview", requireAuth, requirePermission("purchasing.read"), async (_request, response) => {
+  try {
+    const connection = await getDatabasePool();
+    const [summary, requests] = await Promise.all([
+      connection.request().query<{ totalRequests: number; waitingApproval: number; approved: number; totalValue: number }>(`
+        SELECT COUNT(*) AS totalRequests,ISNULL(SUM(IIF(pr.status=N'SUBMITTED',1,0)),0) AS waitingApproval,ISNULL(SUM(IIF(pr.status=N'APPROVED',1,0)),0) AS approved,
+          ISNULL(SUM(IIF(pr.status=N'APPROVED',totals.total_value,0)),0) AS totalValue
+        FROM dbo.purchase_requests pr OUTER APPLY(SELECT SUM(pri.quantity*pri.estimated_unit_price) AS total_value FROM dbo.purchase_request_items pri WHERE pri.purchase_request_id=pr.purchase_request_id) totals;
+      `),
+      connection.request().query(`
+        SELECT TOP 50 pr.purchase_request_id AS purchaseRequestId,pr.request_number AS requestNumber,s.name AS supplier,u.full_name AS requestedBy,
+          pr.status,pr.expected_date AS expectedDate,pr.created_at AS createdAt,COUNT(pri.purchase_request_item_id) AS lineCount,ISNULL(SUM(pri.quantity*pri.estimated_unit_price),0) AS totalValue
+        FROM dbo.purchase_requests pr JOIN dbo.suppliers s ON s.supplier_id=pr.supplier_id JOIN dbo.users u ON u.user_id=pr.requested_by
+        JOIN dbo.purchase_request_items pri ON pri.purchase_request_id=pr.purchase_request_id
+        GROUP BY pr.purchase_request_id,pr.request_number,s.name,u.full_name,pr.status,pr.expected_date,pr.created_at ORDER BY pr.created_at DESC;
+      `)
+    ]);
+    response.json({ summary: summary.recordset[0], requests: requests.recordset });
+  } catch (error) {
+    console.error("Purchasing overview failed:", error);
+    response.status(503).json({ message: "Data Purchasing belum tersedia. Jalankan migration terbaru." });
+  }
+});
+
+app.get("/api/purchasing/master-data", requireAuth, requirePermission("purchasing.read"), async (_request, response) => {
+  try {
+    const connection = await getDatabasePool();
+    const [suppliers, items] = await Promise.all([
+      connection.request().query("SELECT supplier_id AS supplierId,code,name,contact_person AS contactPerson FROM dbo.suppliers WHERE is_active=1 ORDER BY name;"),
+      connection.request().query("SELECT i.item_id AS itemId,i.code,i.name,u.code AS unit FROM dbo.items i JOIN dbo.units u ON u.unit_id=i.unit_id WHERE i.is_active=1 ORDER BY i.name;")
+    ]);
+    response.json({ suppliers: suppliers.recordset, items: items.recordset });
+  } catch (error) {
+    console.error("Purchasing master data failed:", error);
+    response.status(503).json({ message: "Master data Purchasing gagal dimuat." });
+  }
+});
+
+app.post("/api/purchasing/suppliers", requireAuth, requirePermission("purchasing.manage"), async (request, response) => {
+  const { code, name, contactPerson, phone, email, address } = request.body ?? {};
+  if (typeof code !== "string" || !code.trim() || typeof name !== "string" || name.trim().length < 3) { response.status(400).json({ message: "Kode dan nama supplier wajib diisi." }); return; }
+  try {
+    const connection = await getDatabasePool();
+    await connection.request().input("code", sql.NVarChar(30), code.trim().toUpperCase()).input("name", sql.NVarChar(150), name.trim())
+      .input("contactPerson", sql.NVarChar(100), contactPerson?.trim() || null).input("phone", sql.NVarChar(30), phone?.trim() || null)
+      .input("email", sql.NVarChar(254), email?.trim() || null).input("address", sql.NVarChar(500), address?.trim() || null)
+      .query("INSERT dbo.suppliers(code,name,contact_person,phone,email,address) VALUES(@code,@name,@contactPerson,@phone,@email,@address);");
+    response.status(201).json({ message: "Supplier berhasil ditambahkan." });
+  } catch (error) {
+    console.error("Create supplier failed:", error);
+    response.status(409).json({ message: "Supplier gagal dibuat. Pastikan kode supplier unik." });
+  }
+});
+
+app.post("/api/purchasing/requests", requireAuth, requirePermission("purchasing.manage"), async (request: AuthenticatedRequest, response) => {
+  const supplierId = Number(request.body?.supplierId);
+  const expectedDate = typeof request.body?.expectedDate === "string" && request.body.expectedDate ? request.body.expectedDate : null;
+  const notes = typeof request.body?.notes === "string" ? request.body.notes.trim() : "";
+  const items = Array.isArray(request.body?.items) ? request.body.items.map((item: Record<string, unknown>) => ({ itemId: item.itemId, quantity: Number(item.quantity), estimatedUnitPrice: Number(item.estimatedUnitPrice), notes: typeof item.notes === "string" ? item.notes.trim() : "" })) : [];
+  if (!Number.isInteger(supplierId) || !items.length || items.some((item: { itemId: unknown; quantity: number; estimatedUnitPrice: number }) => typeof item.itemId !== "string" || !item.itemId || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.estimatedUnitPrice) || item.estimatedUnitPrice < 0)) {
+    response.status(400).json({ message: "Supplier dan minimal satu detail barang yang valid wajib diisi." }); return;
+  }
+  const connection = await getDatabasePool();
+  const transaction = new sql.Transaction(connection);
+  try {
+    await transaction.begin();
+    const requestNumber = `PR-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${Date.now().toString().slice(-6)}`;
+    const created = await new sql.Request(transaction).input("number", sql.NVarChar(50), requestNumber).input("supplierId", sql.Int, supplierId)
+      .input("requestedBy", sql.UniqueIdentifier, request.auth!.userId).input("expectedDate", sql.Date, expectedDate).input("notes", sql.NVarChar(500), notes || null)
+      .query<{ purchaseRequestId: string }>("INSERT dbo.purchase_requests(request_number,supplier_id,requested_by,expected_date,notes) OUTPUT inserted.purchase_request_id AS purchaseRequestId VALUES(@number,@supplierId,@requestedBy,@expectedDate,@notes);");
+    const purchaseRequestId = created.recordset[0].purchaseRequestId;
+    for (const item of items) {
+      await new sql.Request(transaction).input("purchaseRequestId", sql.UniqueIdentifier, purchaseRequestId).input("itemId", sql.UniqueIdentifier, item.itemId)
+        .input("quantity", sql.Decimal(18,3), item.quantity).input("price", sql.Decimal(18,2), item.estimatedUnitPrice).input("notes", sql.NVarChar(300), item.notes || null)
+        .query("INSERT dbo.purchase_request_items(purchase_request_id,item_id,quantity,estimated_unit_price,notes) VALUES(@purchaseRequestId,@itemId,@quantity,@price,@notes);");
+    }
+    await new sql.Request(transaction).input("actorId", sql.UniqueIdentifier, request.auth!.userId).input("entityId", sql.NVarChar(100), purchaseRequestId)
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id) VALUES(@actorId,N'purchasing.request.create',N'purchase_request',@entityId);");
+    await transaction.commit();
+    response.status(201).json({ message: "Purchase Request berhasil diajukan.", requestNumber });
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    console.error("Create purchase request failed:", error);
+    response.status(400).json({ message: "Purchase Request gagal dibuat. Periksa supplier dan detail barang." });
+  }
+});
+
+app.patch("/api/purchasing/requests/:requestId/decision", requireAuth, requirePermission("purchasing.approve"), async (request: AuthenticatedRequest, response) => {
+  const decision = String(request.body?.decision ?? "").toUpperCase();
+  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : "";
+  if (!["APPROVED","REJECTED"].includes(decision) || (decision === "REJECTED" && !reason)) { response.status(400).json({ message: "Keputusan tidak valid; alasan wajib diisi untuk penolakan." }); return; }
+  const connection = await getDatabasePool();
+  const transaction = new sql.Transaction(connection);
+  try {
+    await transaction.begin();
+    const result = await new sql.Request(transaction).input("requestId", sql.UniqueIdentifier, request.params.requestId).input("decision", sql.NVarChar(20), decision)
+      .input("reason", sql.NVarChar(500), reason || null).input("approvedBy", sql.UniqueIdentifier, request.auth!.userId)
+      .query("UPDATE dbo.purchase_requests SET status=@decision,approved_by=@approvedBy,approved_at=SYSUTCDATETIME(),rejection_reason=@reason,updated_at=SYSUTCDATETIME() OUTPUT inserted.request_number AS requestNumber WHERE purchase_request_id=@requestId AND status=N'SUBMITTED';");
+    if (!result.recordset.length) { await transaction.rollback(); response.status(409).json({ message: "Purchase Request tidak ditemukan atau sudah diputuskan." }); return; }
+    await new sql.Request(transaction).input("actorId", sql.UniqueIdentifier, request.auth!.userId).input("entityId", sql.NVarChar(100), request.params.requestId).input("decision", sql.NVarChar(20), decision)
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id,current_values) VALUES(@actorId,N'purchasing.request.decision',N'purchase_request',@entityId,N'{\"status\":\"'+@decision+N'\"}');");
+    await transaction.commit();
+    response.json({ message: `Purchase Request berhasil ${decision === "APPROVED" ? "disetujui" : "ditolak"}.` });
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    console.error("Purchase request decision failed:", error);
+    response.status(400).json({ message: "Keputusan Purchase Request gagal disimpan." });
+  }
+});
+
 app.get("/api/inventory/overview", requireAuth, requirePermission("inventory.read"), async (_request, response) => {
   try {
     const connection = await getDatabasePool();

@@ -184,12 +184,13 @@ tcp:PUBLIC_IP,1433
 - Login serta bootstrap Administrator pertama dengan JWT dan bcrypt; status aktif, role, dan permission divalidasi ulang pada setiap request.
 - User & Akses: daftar pengguna, tambah akun, ubah departemen/multi-role, aktif/nonaktif akun, serta editor permission per role.
 - Inventory awal: master barang, ringkasan stok, serta transaksi masuk/keluar.
+- Purchasing awal: supplier, Purchase Request multi-item, estimasi nilai, serta alur persetujuan/penolakan berbasis permission.
 
 Permission `inventory.read` dan `inventory.manage` sudah diterapkan pada API. Administrator selalu mempunyai akses penuh; role lain mengikuti permission yang disimpan melalui menu **User & Akses → Role & Permission**.
 
 Role operasional mempunyai permission awal yang aman: Warehouse Staff dapat membaca/mengelola inventory, sedangkan Manager, PPIC, QC, dan Finance mendapat akses baca. Administrator dapat menyesuaikannya melalui editor permission.
 
-Tahap lanjutan yang belum dikerjakan adalah Purchasing, PPIC/Produksi, Quality Control, Finance, laporan dinamis, dan pengujian otomatis yang lebih lengkap.
+Tahap lanjutan yang belum dikerjakan adalah konversi Purchase Request menjadi Purchase Order, PPIC/Produksi, Quality Control, Finance, laporan dinamis, dan pengujian otomatis yang lebih lengkap.
 
 ## Memperbarui deployment Heroku
 

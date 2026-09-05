@@ -4,9 +4,11 @@ import "./styles.css";
 import "./inventory.css";
 import "./connection.css";
 import "./admin/users.css";
+import "./purchasing/purchasing.css";
 import { DatabaseSettings } from "./settings/DatabaseSettings";
 import { AuthScreen } from "./auth/AuthScreen";
 import { UserManagement } from "./admin/UserManagement";
+import { PurchasingPage } from "./purchasing/PurchasingPage";
 
 type MenuKey = "dashboard" | "inventory" | "purchasing" | "ppic" | "quality" | "finance" | "reports" | "users" | "settings";
 type CurrentUser = { userId: string; username: string; fullName: string; roles: string[]; permissions: string[] };
@@ -119,7 +121,10 @@ function App() {
 
   const isAdministrator = currentUser.roles.includes("administrator");
   const canReadInventory = isAdministrator || currentUser.permissions.includes("inventory.read");
-  const mainNavigation = navigation.slice(0, 7).filter((item) => item.key !== "inventory" || canReadInventory);
+  const canReadPurchasing = isAdministrator || currentUser.permissions.includes("purchasing.read");
+  const canManagePurchasing = isAdministrator || currentUser.permissions.includes("purchasing.manage");
+  const canApprovePurchasing = isAdministrator || currentUser.permissions.includes("purchasing.approve");
+  const mainNavigation = navigation.slice(0, 7).filter((item) => (item.key !== "inventory" || canReadInventory) && (item.key !== "purchasing" || canReadPurchasing));
   const systemNavigation = navigation.slice(7).filter((item) => isAdministrator || !["users", "settings"].includes(item.key));
   const initials = currentUser.fullName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const currentDate = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
@@ -142,9 +147,10 @@ function App() {
         <section className="content">
           {activeMenu === "dashboard" && <Dashboard name={currentUser.fullName} canAccessInventory={canReadInventory} onNavigate={setActiveMenu} />}
           {activeMenu === "inventory" && <InventoryPage token={token} />}
+          {activeMenu === "purchasing" && <PurchasingPage token={token} canManage={canManagePurchasing} canApprove={canApprovePurchasing} />}
           {activeMenu === "users" && <UserManagement token={token} />}
           {activeMenu === "settings" && <DatabaseSettings config={config} password={password} testing={isTesting} result={connectionResult} onPassword={setPassword} onConfig={(key, value) => setConfig((current) => ({ ...current, [key]: value }))} onSubmit={testConnection} />}
-          {activeMenu !== "dashboard" && activeMenu !== "settings" && activeMenu !== "inventory" && activeMenu !== "users" && <ModulePlaceholder title={pageTitle} />}
+          {activeMenu !== "dashboard" && activeMenu !== "settings" && activeMenu !== "inventory" && activeMenu !== "purchasing" && activeMenu !== "users" && <ModulePlaceholder title={pageTitle} />}
         </section>
       </main>
     </div>

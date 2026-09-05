@@ -1,0 +1,10 @@
+.purchasing-form .form-grid { grid-template-columns: repeat(3,1fr); }
+.request-lines { margin-top: 20px; border-top: 1px solid #edf0f5; padding-top: 16px; }
+.line-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 13px; }
+.request-line { display: grid; grid-template-columns: minmax(220px,2fr) 110px 150px minmax(150px,1fr) 34px; gap: 8px; margin-bottom: 8px; }
+.request-line input,.request-line select { height: 39px; border: 1px solid #dfe5ef; border-radius: 7px; padding: 0 9px; background: white; min-width: 0; }
+.line-remove { border: 0; background: #fff0f1; color: #c44855; border-radius: 7px; font-size: 18px; }
+.line-remove:disabled { opacity: .35; }
+.approve-link { color: #23835b; }.reject-link { color: #c44b58; }
+@media(max-width:1000px){.request-line{grid-template-columns:1fr 1fr}.request-line select{grid-column:1/-1}.purchasing-form .form-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:700px){.request-line,.purchasing-form .form-grid{grid-template-columns:1fr}.request-line select{grid-column:auto}}
