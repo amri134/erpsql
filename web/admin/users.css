@@ -1,0 +1,23 @@
+.user-form { margin-bottom: 18px; }
+.user-form select { border: 1px solid #dfe5ef; border-radius: 7px; height: 40px; padding: 0 11px; background: white; color: #27354c; }
+.user-form .form-actions { margin-top: 22px; }
+.user-message { background: #eef5ff; color: #315f9f; }
+.user-message + .panel { margin-top: 18px; }
+.access-tabs { display: flex; gap: 6px; margin: -8px 0 18px; border-bottom: 1px solid #e3e8f1; }
+.access-tabs button { border: 0; background: transparent; color: #7d899d; padding: 12px 14px; font-weight: 600; }
+.access-tabs button.active { color: #2867d3; border-bottom: 2px solid #2867d3; }
+.role-layout { display: grid; grid-template-columns: 250px minmax(0,1fr); gap: 18px; }
+.role-list > button { width: 100%; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 11px; text-align: left; display: flex; flex-direction: column; gap: 3px; color: #35435b; }
+.role-list > button small { color: #8b96a9; }
+.role-list > button.active { background: #edf5ff; border-color: #d6e7ff; color: #2867d3; }
+.permission-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.permission-grid label { border: 1px solid #e5eaf2; border-radius: 9px; padding: 13px; display: flex; align-items: flex-start; gap: 10px; }
+.permission-grid label:has(input:checked) { border-color: #b9d4fa; background: #f4f8ff; }
+.permission-grid label.locked { opacity: .75; }
+.permission-grid input { margin-top: 3px; }
+.permission-grid span { display: flex; flex-direction: column; gap: 3px; }
+.permission-grid strong { font-size: 12px; }
+.permission-grid small { color: #3971bd; font-size: 10px; }
+.permission-grid p { margin: 3px 0 0; color: #8994a7; font-size: 11px; line-height: 1.4; }
+.permission-editor .form-actions { margin-top: 20px; }
+@media (max-width:900px){.role-layout{grid-template-columns:1fr}.permission-grid{grid-template-columns:1fr}}

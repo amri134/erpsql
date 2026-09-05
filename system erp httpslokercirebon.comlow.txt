@@ -520,3 +520,35 @@ Tax
 
 Lowongan tersebut meminta Staff EXIM berpengalaman menggunakan inventory berbasis IT dan memahami CEISA
 
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+59a1d5d968625e800bfd3be2ab9fb628450655368cd9abdeec421728a1b58c5404ac7a1195d7e3b31c7c9efe33cbbdba
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+59a1d5d968625e800bfd3be2ab9fb628450655368cd9abdeec421728a1b58c5404ac7a1195d7e3b31c7c9efe33cbbdba
+
+
+$jwtSecret = [Convert]::ToBase64String(
+  [Security.Cryptography.RandomNumberGenerator]::GetBytes(48)
+)
+
+$jwtSecret = [Convert]::ToBase64String(
+  [Security.Cryptography.RandomNumberGenerator]::GetBytes(48)
+)
+
+heroku config:set `
+  SERVER="35.247.180.186" `
+  DB_PORT="1433" `
+  DATABASE="erp" `
+  DB_USERNAME="sqlserver" `
+  PASSWORD="MyERP#Sql2026!Server" `
+  JWT_SECRET="$jwtSecret" `
+  -a NAMA-APLIKASI
+
+heroku config:set JWT_SECRET="$jwtSecret" -a NAMA-APLIKASI
+
+ $jwtSecret
++0hPoZrTjo/jvh9t+m/k98runCldFyNUXdAoKup24nmwWbXBV9f721qeH3E5OwPB
+ $jwtSecret
++0hPoZrTjo/jvh9t+m/k98runCldFyNUXdAoKup24nmwWbXBV9f721qeH3E5OwPB
+

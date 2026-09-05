@@ -18,7 +18,7 @@ async function migrate() {
     const files = (await readdir(migrationsDirectory)).filter((file) => file.endsWith(".sql")).sort();
     for (const file of files) {
       const applied = await connection.request().input("name", sql.NVarChar(255), file)
-        .query<{ exists: number }>("SELECT 1 AS exists FROM dbo.schema_migrations WHERE migration_name = @name;");
+        .query<{ alreadyApplied: number }>("SELECT 1 AS alreadyApplied FROM dbo.schema_migrations WHERE migration_name = @name;");
       if (applied.recordset.length) continue;
       await connection.request().batch(await readFile(resolve(migrationsDirectory, file), "utf8"));
       await connection.request().input("name", sql.NVarChar(255), file)

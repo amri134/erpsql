@@ -3,10 +3,12 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import "./inventory.css";
 import "./connection.css";
+import "./admin/users.css";
 import { DatabaseSettings } from "./settings/DatabaseSettings";
 import { AuthScreen } from "./auth/AuthScreen";
+import { UserManagement } from "./admin/UserManagement";
 
-type MenuKey = "dashboard" | "inventory" | "purchasing" | "ppic" | "quality" | "finance" | "reports" | "settings";
+type MenuKey = "dashboard" | "inventory" | "purchasing" | "ppic" | "quality" | "finance" | "reports" | "users" | "settings";
 
 type ConnectionConfig = {
   server: string;
@@ -25,6 +27,7 @@ const navigation: { key: MenuKey; label: string; icon: string }[] = [
   { key: "quality", label: "Quality Control", icon: "✓" },
   { key: "finance", label: "Finance", icon: "◈" },
   { key: "reports", label: "Laporan", icon: "▤" },
+  { key: "users", label: "User & Akses", icon: "♙" },
   { key: "settings", label: "Pengaturan", icon: "⚙" }
 ];
 
@@ -58,11 +61,12 @@ function App() {
   const [connectionResult, setConnectionResult] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   useEffect(() => {
-    fetch("/api/database/config")
+    if (!token) return;
+    fetch("/api/database/config", { headers: { Authorization: `Bearer ${token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((data: ConnectionConfig) => setConfig(data))
       .catch(() => undefined);
-  }, []);
+  }, [token]);
 
   useEffect(() => { fetch("/api/auth/status").then((response) => response.json()).then((data) => setNeedsBootstrap(Boolean(data.needsBootstrap))).catch(() => setNeedsBootstrap(null)); }, []);
 
@@ -76,7 +80,7 @@ function App() {
     try {
       const response = await fetch("/api/database/test-connection", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ ...config, password })
       });
       const data = await response.json();
@@ -103,8 +107,8 @@ function App() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">E</span><span>ERP<span className="brand-accent">Nexus</span></span></div>
-        <div className="workspace"><span className="workspace-dot" /> PT Nusantara Manufacturing <span className="chevron">⌄</span></div>
+        <div className="brand"><span className="brand-mark">E</span><span>ERP<span className="brand-accent">JIN</span></span></div>
+        <div className="workspace"><span className="workspace-dot" /> PT Hajijin Amri <span className="chevron">⌄</span></div>
         <nav>
           <p className="nav-label">MENU UTAMA</p>
           {navigation.slice(0, 7).map((item) => <button key={item.key} className={`nav-item ${activeMenu === item.key ? "active" : ""}`} onClick={() => setActiveMenu(item.key)}><span>{item.icon}</span>{item.label}</button>)}
@@ -115,12 +119,13 @@ function App() {
       </aside>
 
       <main>
-        <header className="topbar"><div><p className="breadcrumb">ERP Nexus / {pageTitle}</p><h1>{pageTitle}</h1></div><div className="top-actions"><button className="icon-button">⌕</button><button className="notification">♧<i /></button><span className="date">Jumat, 5 September 2026</span></div></header>
+        <header className="topbar"><div><p className="breadcrumb">ERPJIN / {pageTitle}</p><h1>{pageTitle}</h1></div><div className="top-actions"><button className="icon-button">⌕</button><button className="notification">♧<i /></button><span className="date">Jumat, 5 September 2026</span></div></header>
         <section className="content">
           {activeMenu === "dashboard" && <Dashboard onNavigate={setActiveMenu} />}
           {activeMenu === "inventory" && <InventoryPage token={token} />}
+          {activeMenu === "users" && <UserManagement token={token} />}
           {activeMenu === "settings" && <DatabaseSettings config={config} password={password} testing={isTesting} result={connectionResult} onPassword={setPassword} onConfig={(key, value) => setConfig((current) => ({ ...current, [key]: value }))} onSubmit={testConnection} />}
-          {activeMenu !== "dashboard" && activeMenu !== "settings" && activeMenu !== "inventory" && <ModulePlaceholder title={pageTitle} />}
+          {activeMenu !== "dashboard" && activeMenu !== "settings" && activeMenu !== "inventory" && activeMenu !== "users" && <ModulePlaceholder title={pageTitle} />}
         </section>
       </main>
     </div>
@@ -151,7 +156,7 @@ function InventoryPage({ token }: { token: string }) {
   const [message, setMessage] = useState("Memuat data inventory...");
   const [itemForm, setItemForm] = useState({ code: "", name: "", categoryId: "", unitId: "", minimumStock: "0" });
   const [transactionForm, setTransactionForm] = useState({ itemId: "", warehouseId: "", type: "IN", quantity: "", referenceNumber: "", notes: "" });
-  const load = async () => { try { const [overviewResponse, masterResponse] = await Promise.all([fetch("/api/inventory/overview"), fetch("/api/inventory/master-data")]); const overview = await overviewResponse.json(); const master = await masterResponse.json(); if (!overviewResponse.ok) throw new Error(overview.message); if (!masterResponse.ok) throw new Error(master.message); setData(overview); setMasters(master); } catch (error) { setMessage(error instanceof Error ? error.message : "Data gagal dimuat."); } };
+  const load = async () => { try { const headers = { Authorization: `Bearer ${token}` }; const [overviewResponse, masterResponse] = await Promise.all([fetch("/api/inventory/overview", { headers }), fetch("/api/inventory/master-data", { headers })]); const overview = await overviewResponse.json(); const master = await masterResponse.json(); if (!overviewResponse.ok) throw new Error(overview.message); if (!masterResponse.ok) throw new Error(master.message); setData(overview); setMasters(master); } catch (error) { setMessage(error instanceof Error ? error.message : "Data gagal dimuat."); } };
   useEffect(() => { void load(); }, []);
   const submit = async (event: FormEvent) => { event.preventDefault(); const endpoint = mode === "item" ? "/api/inventory/items" : "/api/inventory/transactions"; const payload = mode === "item" ? itemForm : transactionForm; const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) }); const body = await response.json(); setMessage(body.message); if (response.ok) { setMode(null); await load(); } };
   return <><div className="welcome"><div><h2>Inventory</h2><p>Master barang dan posisi stok berdasarkan histori transaksi.</p></div><div className="inventory-actions"><button className="outline-button" onClick={() => setMode("transaction")}>＋ Transaksi Stok</button><button className="primary-button" onClick={() => setMode("item")}>＋ Tambah Barang</button></div></div>

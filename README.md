@@ -1,4 +1,4 @@
-# ERP Backend
+# ERPJIN — PT Hajijin Amri
 
 Backend awal untuk sistem ERP, memakai Node.js, TypeScript, Express, dan Microsoft SQL Server.
 
@@ -33,7 +33,7 @@ npm run dev
 npm run dev:web
 ```
 
-Buka `http://localhost:5173`. Halaman **Pengaturan → Koneksi Database** memuat host, port, database, dan username dari `.env`; password perlu diisi setiap kali pengujian. Tombol **Uji Koneksi SQL Server** mengirim kredensial hanya untuk pengujian dan tidak menyimpannya.
+Buka `http://localhost:5173`. Setelah login sebagai Administrator, halaman **Pengaturan → Koneksi Database** memuat konfigurasi dari `.env`. Password perlu diisi setiap kali menguji perubahan. Jika koneksi berhasil, konfigurasi lokal disimpan ke `.env`; jika gagal, konfigurasi tidak ditimpa dan dapat dikoreksi. Di Heroku, penyimpanan permanen tetap dilakukan melalui Config Vars.
 
 ## Endpoint awal
 
@@ -109,9 +109,9 @@ Project disiapkan sebagai satu aplikasi: Heroku membangun TypeScript dan React, 
    - `DATABASE`: nama database
    - `DB_USERNAME`: login SQL Server
    - `PASSWORD`: password SQL Server
-   - `DB_ENCRYPT`: `true`
-   - `DB_TRUST_SERVER_CERTIFICATE`: `true` untuk pengembangan; gunakan `false` dengan sertifikat valid
    - `JWT_SECRET`: secret acak minimal 32 karakter untuk menandatangani sesi login
+
+   `DB_ENCRYPT` dan `DB_TRUST_SERVER_CERTIFICATE` bersifat opsional; jika tidak diisi, aplikasi memakai `true`. Untuk SQL Server dengan sertifikat TLS resmi, atur `DB_TRUST_SERVER_CERTIFICATE=false`.
 
    Jangan membuat Config Var bernama `PORT`; Heroku mengaturnya secara otomatis.
 
@@ -129,6 +129,43 @@ Project disiapkan sebagai satu aplikasi: Heroku membangun TypeScript dan React, 
    heroku logs --tail
    ```
 
+### Dyno dan konfigurasi melalui CLI
+
+Project mempunyai proses `web` untuk Express dan `release` untuk migrasi. Proses `release` berjalan sekali sebelum rilis aktif, sehingga yang perlu dinyalakan terus hanya satu dyno `web`.
+
+Untuk demo/pengembangan yang boleh tidur saat tidak aktif, gunakan Eco (memerlukan langganan Eco):
+
+```powershell
+heroku ps:type web=eco -a NAMA-APLIKASI
+heroku ps:scale web=1 -a NAMA-APLIKASI
+```
+
+Untuk penggunaan ERP yang harus selalu tersedia, mulai dari Basic:
+
+```powershell
+heroku ps:type web=basic -a NAMA-APLIKASI
+heroku ps:scale web=1 -a NAMA-APLIKASI
+```
+
+Config Vars minimum dapat diatur dari PowerShell sebagai berikut. Ganti seluruh nilai contoh dan jangan menyalin password asli ke dokumentasi atau Git:
+
+Untuk membuat `JWT_SECRET` pada Windows PowerShell versi lama maupun baru:
+
+```powershell
+$jwtBytes = New-Object byte[] 48
+$jwtGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
+$jwtGenerator.GetBytes($jwtBytes)
+$jwtSecret = [Convert]::ToBase64String($jwtBytes)
+$jwtGenerator.Dispose()
+```
+
+```powershell
+heroku config:set SERVER="PUBLIC_IP_SQL" DB_PORT="1433" DATABASE="erp" DB_USERNAME="sqlserver" PASSWORD="PASSWORD_SQL" JWT_SECRET="$jwtSecret" -a NAMA-APLIKASI
+heroku config -a NAMA-APLIKASI
+```
+
+Perintah pertama menyimpan nilai sensitif dalam riwayat terminal. Untuk mesin bersama, masukkan `PASSWORD` dan `JWT_SECRET` melalui Dashboard Heroku, atau bersihkan riwayat PowerShell setelah konfigurasi.
+
 Pada Heroku, filesystem dyno bersifat sementara. Karena itu perubahan koneksi dari halaman Settings hanya dapat diuji; agar permanen, ubah Config Vars di Heroku Dashboard lalu restart app. Untuk koneksi SQL Server publik, batasi firewall bila Anda memiliki alamat outbound statis; `0.0.0.0/0` sebaiknya hanya untuk pengujian.
 
 ## Login pertama
@@ -140,3 +177,14 @@ Format koneksi pada halaman Settings mengikuti `sqlcmd`:
 ```text
 tcp:PUBLIC_IP,1433
 ```
+
+## Tahap fitur saat ini
+
+- Dashboard, koneksi SQL Server, migrasi otomatis, dan kesiapan local/Heroku.
+- Login serta bootstrap Administrator pertama dengan JWT dan bcrypt.
+- User & Akses: daftar pengguna, tambah akun, pilih departemen/role, aktif/nonaktif akun, serta editor permission per role.
+- Inventory awal: master barang, ringkasan stok, serta transaksi masuk/keluar.
+
+Permission `inventory.read` dan `inventory.manage` sudah diterapkan pada API. Administrator selalu mempunyai akses penuh; role lain mengikuti permission yang disimpan melalui menu **User & Akses → Role & Permission**.
+
+Tahap lanjutan yang belum dikerjakan adalah perubahan role milik pengguna yang sudah ada, Purchasing, PPIC/Produksi, Quality Control, Finance, laporan dinamis, dan pengujian otomatis yang lebih lengkap.

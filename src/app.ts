@@ -19,6 +19,32 @@ function requireAuth(request: AuthenticatedRequest, response: express.Response, 
   catch { response.status(401).json({ message: "Sesi tidak valid atau sudah berakhir." }); }
 }
 
+function requireAdministrator(request: AuthenticatedRequest, response: express.Response, next: express.NextFunction) {
+  if (!request.auth?.roles.includes("administrator")) {
+    response.status(403).json({ message: "Fitur ini hanya dapat diakses Administrator." });
+    return;
+  }
+  next();
+}
+
+function requirePermission(permissionCode: string) {
+  return async (request: AuthenticatedRequest, response: express.Response, next: express.NextFunction) => {
+    if (request.auth?.roles.includes("administrator")) { next(); return; }
+    try {
+      const connection = await getDatabasePool();
+      const result = await connection.request()
+        .input("userId", sql.UniqueIdentifier, request.auth!.userId)
+        .input("permissionCode", sql.NVarChar(100), permissionCode)
+        .query("SELECT TOP 1 1 AS allowed FROM dbo.user_roles ur JOIN dbo.role_permissions rp ON rp.role_id=ur.role_id JOIN dbo.permissions p ON p.permission_id=rp.permission_id WHERE ur.user_id=@userId AND p.code=@permissionCode;");
+      if (!result.recordset.length) { response.status(403).json({ message: "Anda tidak memiliki permission untuk fitur ini." }); return; }
+      next();
+    } catch (error) {
+      console.error("Permission check failed:", error);
+      response.status(503).json({ message: "Permission pengguna gagal diverifikasi." });
+    }
+  };
+}
+
 app.get("/api/auth/status", async (_request, response) => {
   try {
     const connection = await getDatabasePool();
@@ -48,18 +74,183 @@ app.post("/api/auth/bootstrap", async (request, response) => {
 app.post("/api/auth/login", async (request, response) => {
   const { username, password } = request.body ?? {};
   if (typeof username !== "string" || typeof password !== "string") { response.status(400).json({ message: "Username dan password wajib diisi." }); return; }
-  const connection = await getDatabasePool();
-  const result = await connection.request().input("username", sql.NVarChar(50), username.trim()).query<{ userId: string; username: string; fullName: string; passwordHash: string; roles: string | null }>(`
-    SELECT u.user_id AS userId,u.username,u.full_name AS fullName,u.password_hash AS passwordHash,STRING_AGG(r.code,',') AS roles FROM dbo.users u LEFT JOIN dbo.user_roles ur ON ur.user_id=u.user_id LEFT JOIN dbo.roles r ON r.role_id=ur.role_id WHERE u.username=@username AND u.is_active=1 GROUP BY u.user_id,u.username,u.full_name,u.password_hash;
-  `);
-  const user = result.recordset[0];
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) { response.status(401).json({ message: "Username atau password salah." }); return; }
-  const roles = user.roles?.split(",") ?? [];
-  const token = jwt.sign({ userId: user.userId, username: user.username, roles }, env.jwtSecret, { expiresIn: "8h" });
-  response.json({ token, user: { userId: user.userId, username: user.username, fullName: user.fullName, roles } });
+  try {
+    const connection = await getDatabasePool();
+    const result = await connection.request().input("username", sql.NVarChar(50), username.trim()).query<{ userId: string; username: string; fullName: string; passwordHash: string; roles: string | null }>(`
+      SELECT u.user_id AS userId,u.username,u.full_name AS fullName,u.password_hash AS passwordHash,STRING_AGG(r.code,',') AS roles FROM dbo.users u LEFT JOIN dbo.user_roles ur ON ur.user_id=u.user_id LEFT JOIN dbo.roles r ON r.role_id=ur.role_id WHERE u.username=@username AND u.is_active=1 GROUP BY u.user_id,u.username,u.full_name,u.password_hash;
+    `);
+    const user = result.recordset[0];
+    if (!user || !(await bcrypt.compare(password, user.passwordHash))) { response.status(401).json({ message: "Username atau password ERP salah." }); return; }
+    const roles = user.roles?.split(",") ?? [];
+    const token = jwt.sign({ userId: user.userId, username: user.username, roles }, env.jwtSecret, { expiresIn: "8h" });
+    response.json({ token, user: { userId: user.userId, username: user.username, fullName: user.fullName, roles } });
+  } catch (error) {
+    console.error("Login database connection failed:", error);
+    response.status(503).json({ message: "Login belum dapat diproses karena SQL Server tidak dapat dihubungi." });
+  }
 });
 
 app.get("/api/auth/me", requireAuth, (request: AuthenticatedRequest, response) => response.json({ user: request.auth }));
+
+app.get("/api/admin/access-options", requireAuth, requireAdministrator, async (_request, response) => {
+  try {
+    const connection = await getDatabasePool();
+    const [departments, roles] = await Promise.all([
+      connection.request().query("SELECT department_id AS departmentId, code, name FROM dbo.departments WHERE is_active=1 ORDER BY name;"),
+      connection.request().query("SELECT role_id AS roleId, code, name, description FROM dbo.roles ORDER BY name;")
+    ]);
+    response.json({ departments: departments.recordset, roles: roles.recordset });
+  } catch (error) {
+    console.error("Access options failed:", error);
+    response.status(503).json({ message: "Data role dan departemen belum tersedia." });
+  }
+});
+
+app.get("/api/admin/users", requireAuth, requireAdministrator, async (_request, response) => {
+  try {
+    const connection = await getDatabasePool();
+    const result = await connection.request().query(`
+      SELECT u.user_id AS userId, u.username, u.full_name AS fullName, u.email,
+        u.is_active AS isActive, u.created_at AS createdAt,
+        d.name AS departmentName,
+        STRING_AGG(r.name, ', ') WITHIN GROUP (ORDER BY r.name) AS roles
+      FROM dbo.users u
+      LEFT JOIN dbo.departments d ON d.department_id=u.department_id
+      LEFT JOIN dbo.user_roles ur ON ur.user_id=u.user_id
+      LEFT JOIN dbo.roles r ON r.role_id=ur.role_id
+      GROUP BY u.user_id,u.username,u.full_name,u.email,u.is_active,u.created_at,d.name
+      ORDER BY u.created_at DESC;
+    `);
+    response.json({ users: result.recordset });
+  } catch (error) {
+    console.error("User list failed:", error);
+    response.status(503).json({ message: "Daftar pengguna gagal dimuat." });
+  }
+});
+
+app.get("/api/admin/roles", requireAuth, requireAdministrator, async (_request, response) => {
+  try {
+    const connection = await getDatabasePool();
+    const [roles, permissions, assignments] = await Promise.all([
+      connection.request().query("SELECT role_id AS roleId, code, name, description, is_system_role AS isSystemRole FROM dbo.roles ORDER BY name;"),
+      connection.request().query("SELECT permission_id AS permissionId, code, name, description FROM dbo.permissions ORDER BY code;"),
+      connection.request().query("SELECT role_id AS roleId, permission_id AS permissionId FROM dbo.role_permissions;")
+    ]);
+    const assignedByRole = new Map<number, number[]>();
+    for (const assignment of assignments.recordset as { roleId: number; permissionId: number }[]) {
+      assignedByRole.set(assignment.roleId, [...(assignedByRole.get(assignment.roleId) ?? []), assignment.permissionId]);
+    }
+    response.json({
+      roles: (roles.recordset as Array<Record<string, unknown> & { roleId: number }>).map((role) => ({ ...role, permissionIds: assignedByRole.get(role.roleId) ?? [] })),
+      permissions: permissions.recordset
+    });
+  } catch (error) {
+    console.error("Role permission list failed:", error);
+    response.status(503).json({ message: "Role dan permission gagal dimuat." });
+  }
+});
+
+app.put("/api/admin/roles/:roleId/permissions", requireAuth, requireAdministrator, async (request: AuthenticatedRequest, response) => {
+  const roleId = Number(request.params.roleId);
+  const permissionIds = Array.isArray(request.body?.permissionIds) ? [...new Set(request.body.permissionIds.map(Number))] : null;
+  if (!Number.isInteger(roleId) || !permissionIds || permissionIds.some((id) => !Number.isInteger(id))) {
+    response.status(400).json({ message: "Daftar permission tidak valid." });
+    return;
+  }
+  const connection = await getDatabasePool();
+  const transaction = new sql.Transaction(connection);
+  try {
+    await transaction.begin();
+    const role = await new sql.Request(transaction).input("roleId", sql.Int, roleId)
+      .query<{ code: string }>("SELECT code FROM dbo.roles WITH(UPDLOCK,HOLDLOCK) WHERE role_id=@roleId;");
+    if (!role.recordset.length) throw new Error("ROLE_NOT_FOUND");
+    if (role.recordset[0].code === "administrator") throw new Error("ADMIN_LOCKED");
+
+    if (permissionIds.length) {
+      const validationRequest = new sql.Request(transaction).input("permissionIds", sql.NVarChar(sql.MAX), JSON.stringify(permissionIds));
+      const valid = await validationRequest.query<{ total: number }>("SELECT COUNT(*) AS total FROM dbo.permissions WHERE permission_id IN (SELECT TRY_CONVERT(INT,[value]) FROM OPENJSON(@permissionIds));");
+      if (valid.recordset[0].total !== permissionIds.length) throw new Error("INVALID_PERMISSION");
+    }
+
+    await new sql.Request(transaction).input("roleId", sql.Int, roleId).query("DELETE dbo.role_permissions WHERE role_id=@roleId;");
+    for (const permissionId of permissionIds) {
+      await new sql.Request(transaction).input("roleId", sql.Int, roleId).input("permissionId", sql.Int, permissionId)
+        .query("INSERT dbo.role_permissions(role_id,permission_id) VALUES(@roleId,@permissionId);");
+    }
+    await new sql.Request(transaction)
+      .input("actorId", sql.UniqueIdentifier, request.auth!.userId)
+      .input("entityId", sql.NVarChar(100), String(roleId))
+      .input("values", sql.NVarChar(sql.MAX), JSON.stringify({ permissionIds }))
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id,current_values) VALUES(@actorId,N'roles.permissions.update',N'role',@entityId,@values);");
+    await transaction.commit();
+    response.json({ message: "Permission role berhasil diperbarui." });
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    const code = error instanceof Error ? error.message : "";
+    const status = code === "ROLE_NOT_FOUND" ? 404 : code === "ADMIN_LOCKED" ? 409 : 400;
+    const message = code === "ROLE_NOT_FOUND" ? "Role tidak ditemukan." : code === "ADMIN_LOCKED" ? "Permission Administrator dikunci agar akses penuh tetap tersedia." : "Permission role gagal diperbarui.";
+    response.status(status).json({ message });
+  }
+});
+
+app.post("/api/admin/users", requireAuth, requireAdministrator, async (request: AuthenticatedRequest, response) => {
+  const { username, fullName, email, password, departmentId, roleId } = request.body ?? {};
+  const parsedDepartmentId = Number(departmentId);
+  const parsedRoleId = Number(roleId);
+  if (typeof username !== "string" || username.trim().length < 3 || typeof fullName !== "string" || fullName.trim().length < 3 || typeof password !== "string" || password.length < 8 || !Number.isInteger(parsedDepartmentId) || !Number.isInteger(parsedRoleId)) {
+    response.status(400).json({ message: "Lengkapi nama, username, password minimal 8 karakter, departemen, dan role." });
+    return;
+  }
+  const connection = await getDatabasePool();
+  const transaction = new sql.Transaction(connection);
+  try {
+    const hash = await bcrypt.hash(password, 12);
+    await transaction.begin();
+    const created = await new sql.Request(transaction)
+      .input("username", sql.NVarChar(50), username.trim())
+      .input("fullName", sql.NVarChar(150), fullName.trim())
+      .input("email", sql.NVarChar(254), typeof email === "string" && email.trim() ? email.trim() : null)
+      .input("hash", sql.NVarChar(255), hash)
+      .input("departmentId", sql.Int, parsedDepartmentId)
+      .query<{ userId: string }>("INSERT dbo.users(username,full_name,email,password_hash,department_id) OUTPUT inserted.user_id AS userId VALUES(@username,@fullName,@email,@hash,@departmentId);");
+    const userId = created.recordset[0].userId;
+    await new sql.Request(transaction)
+      .input("userId", sql.UniqueIdentifier, userId)
+      .input("roleId", sql.Int, parsedRoleId)
+      .input("assignedBy", sql.UniqueIdentifier, request.auth!.userId)
+      .query("INSERT dbo.user_roles(user_id,role_id,assigned_by) VALUES(@userId,@roleId,@assignedBy);");
+    await new sql.Request(transaction)
+      .input("actorId", sql.UniqueIdentifier, request.auth!.userId)
+      .input("entityId", sql.NVarChar(100), userId)
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id) VALUES(@actorId,N'users.create',N'user',@entityId);");
+    await transaction.commit();
+    response.status(201).json({ message: "Pengguna berhasil dibuat." });
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    console.error("Create user failed:", error);
+    response.status(409).json({ message: "Pengguna gagal dibuat. Pastikan username/email unik dan master data valid." });
+  }
+});
+
+app.patch("/api/admin/users/:userId/status", requireAuth, requireAdministrator, async (request: AuthenticatedRequest, response) => {
+  const { userId } = request.params;
+  const { isActive } = request.body ?? {};
+  if (typeof isActive !== "boolean") { response.status(400).json({ message: "Status pengguna tidak valid." }); return; }
+  if (userId === request.auth!.userId && !isActive) { response.status(409).json({ message: "Anda tidak dapat menonaktifkan akun sendiri." }); return; }
+  try {
+    const connection = await getDatabasePool();
+    const result = await connection.request().input("userId", sql.UniqueIdentifier, userId).input("isActive", sql.Bit, isActive)
+      .query("UPDATE dbo.users SET is_active=@isActive,updated_at=SYSUTCDATETIME() OUTPUT inserted.user_id WHERE user_id=@userId;");
+    if (!result.recordset.length) { response.status(404).json({ message: "Pengguna tidak ditemukan." }); return; }
+    await connection.request().input("actorId", sql.UniqueIdentifier, request.auth!.userId).input("entityId", sql.NVarChar(100), userId)
+      .input("values", sql.NVarChar(sql.MAX), JSON.stringify({ isActive }))
+      .query("INSERT dbo.audit_logs(user_id,action,entity_type,entity_id,current_values) VALUES(@actorId,N'users.status',N'user',@entityId,@values);");
+    response.json({ message: `Pengguna berhasil ${isActive ? "diaktifkan" : "dinonaktifkan"}.` });
+  } catch (error) {
+    console.error("Update user status failed:", error);
+    response.status(400).json({ message: "Status pengguna gagal diubah." });
+  }
+});
 
 app.get("/health", (_request, response) => {
   response.status(200).json({ status: "ok" });
@@ -83,7 +274,7 @@ app.get("/health/db", async (_request, response) => {
   }
 });
 
-app.get("/api/database/config", (_request, response) => {
+app.get("/api/database/config", requireAuth, requireAdministrator, (_request, response) => {
   response.status(200).json({
     server: `tcp:${env.database.server},${env.database.port}`,
     database: env.database.database,
@@ -93,7 +284,7 @@ app.get("/api/database/config", (_request, response) => {
   });
 });
 
-app.post("/api/database/test-connection", async (request, response) => {
+app.post("/api/database/test-connection", requireAuth, requireAdministrator, async (request, response) => {
   const { server, database, user, password, encrypt, trustServerCertificate } = request.body ?? {};
   const serverMatch = typeof server === "string" ? server.trim().match(/^tcp:([^,\s]+),(\d{1,5})$/i) : null;
   const parsedPort = serverMatch ? Number(serverMatch[2]) : NaN;
@@ -141,7 +332,7 @@ app.post("/api/database/test-connection", async (request, response) => {
   }
 });
 
-app.get("/api/inventory/overview", async (_request, response) => {
+app.get("/api/inventory/overview", requireAuth, requirePermission("inventory.read"), async (_request, response) => {
   try {
     const connection = await getDatabasePool();
     const result = await connection.request().query<{ itemId: string; code: string; name: string; unit: string; currentStock: number; minimumStock: number }>(`
@@ -162,7 +353,7 @@ app.get("/api/inventory/overview", async (_request, response) => {
   }
 });
 
-app.get("/api/inventory/master-data", async (_request, response) => {
+app.get("/api/inventory/master-data", requireAuth, requirePermission("inventory.read"), async (_request, response) => {
   try {
     const connection = await getDatabasePool();
     const [categories, units, warehouses] = await Promise.all([
@@ -177,7 +368,7 @@ app.get("/api/inventory/master-data", async (_request, response) => {
   }
 });
 
-app.post("/api/inventory/items", requireAuth, async (request, response) => {
+app.post("/api/inventory/items", requireAuth, requirePermission("inventory.manage"), async (request, response) => {
   const { code, name, categoryId, unitId, minimumStock } = request.body ?? {};
   if (typeof code !== "string" || !code.trim() || typeof name !== "string" || !name.trim() || !Number.isInteger(Number(categoryId)) || !Number.isInteger(Number(unitId)) || Number(minimumStock) < 0) {
     response.status(400).json({ message: "Data barang belum lengkap atau tidak valid." });
@@ -199,7 +390,7 @@ app.post("/api/inventory/items", requireAuth, async (request, response) => {
   }
 });
 
-app.post("/api/inventory/transactions", requireAuth, async (request, response) => {
+app.post("/api/inventory/transactions", requireAuth, requirePermission("inventory.manage"), async (request, response) => {
   const { itemId, warehouseId, type, quantity, referenceNumber, notes } = request.body ?? {};
   const normalizedType = String(type ?? "").toUpperCase();
   const parsedQuantity = Number(quantity);
