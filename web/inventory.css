@@ -1,0 +1,20 @@
+.form-grid select {
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid #dfe5ef;
+  border-radius: 7px;
+  outline-color: #79a9eb;
+  color: #27354c;
+  background: #fff;
+}
+
+.inventory-actions { display: flex; gap: 10px; }
+.inventory-actions .outline-button { width: auto; margin: 0; padding: 10px 16px; }
+.entry-form { margin-bottom: 21px; }
+.entry-form .form-grid { grid-template-columns: repeat(3, 1fr); }
+.form-submit { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #edf0f5; }
+
+@media (max-width: 800px) {
+  .entry-form .form-grid { grid-template-columns: 1fr; }
+  .inventory-actions { flex-direction: column; }
+}

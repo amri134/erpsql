@@ -1,0 +1,11 @@
+.connection-example {
+  margin-top: 20px;
+  padding: 13px 15px;
+  overflow-x: auto;
+  border: 1px solid #dbe7f7;
+  border-radius: 8px;
+  color: #285f9f;
+  background: #f4f8fd;
+  font: 600 12px Consolas, monospace;
+  white-space: nowrap;
+}
